@@ -1,4 +1,4 @@
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosAdapter, AxiosInstance } from 'axios';
 import {
   ManualProcessNeeded,
   ManualProcessNeededErrorCode,
@@ -9,14 +9,20 @@ import {
   NotConnectedErrorCodes,
 } from '../errors/index.js';
 import axiosRetry from 'axios-retry';
+import { ReleaseSlot, Semaphore, SemaphoreQueueFullError, SemaphoreTimeoutError } from './semaphore.js';
 
-const MAX_REQUESTS_COUNT = 1;
-const INTERVAL_MS = 10;
-let PENDING_REQUESTS = 0;
+export const REQUEST_TIMEOUT_MS = 60000;
+export const MAX_CONCURRENT_REQUESTS = 1;
+export const MAX_QUEUED_REQUESTS = 60;
+export const ACQUIRE_TIMEOUT_MS = 120000;
 
-const releaseRequestSlot = () => {
-  PENDING_REQUESTS = Math.max(0, PENDING_REQUESTS - 1);
-};
+const BASE_ADAPTER = Symbol('thinq.baseAdapter');
+
+export const requestSemaphore = new Semaphore({
+  concurrency: MAX_CONCURRENT_REQUESTS,
+  maxQueueLength: MAX_QUEUED_REQUESTS,
+  acquireTimeoutMs: ACQUIRE_TIMEOUT_MS,
+});
 
 function stringValue(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
@@ -35,27 +41,49 @@ function errorWithCause<T extends Error>(error: T, cause: unknown): T {
   return error;
 }
 
+/**
+ * Wraps the real adapter so the queue slot is held for exactly the duration of
+ * the network call and released in a `finally`.
+ *
+ * Doing this at the adapter level rather than in interceptors is deliberate: an
+ * adapter that rejects with something other than an AxiosError carries no
+ * `config`, so an interceptor-based release has nothing to key off and silently
+ * leaks the slot. One leak with a concurrency of 1 wedges every later request,
+ * which is how the plugin used to end up permanently unresponsive.
+ */
+function wrapAdapter(base: AxiosAdapter): AxiosAdapter {
+  const wrapped: AxiosAdapter = async (config) => {
+    const release: ReleaseSlot = await requestSemaphore.acquire();
+    try {
+      return await base(config);
+    } finally {
+      release();
+    }
+  };
+
+  (wrapped as AxiosAdapter & { [BASE_ADAPTER]?: AxiosAdapter })[BASE_ADAPTER] = base;
+  return wrapped;
+}
+
+/** Resolves the underlying adapter, unwrapping a previous wrap if present. */
+function baseAdapterFor(candidate: unknown): AxiosAdapter {
+  const previous = (candidate as { [BASE_ADAPTER]?: AxiosAdapter } | undefined)?.[BASE_ADAPTER];
+  if (previous) {
+    return previous;
+  }
+
+  return axios.getAdapter(candidate as any);
+}
+
 const client = axios.create();
-client.defaults.timeout = 60000; // 60s timeout
+client.defaults.timeout = REQUEST_TIMEOUT_MS;
 
+// Re-wrapped per attempt. axios-retry re-dispatches the same config object, so
+// the previous wrapper is unwrapped first to avoid nesting an acquire inside an
+// already-held slot, which would deadlock at a concurrency of 1.
 client.interceptors.request.use((config) => {
-  return new Promise((resolve) => {
-    const interval = setInterval(() => {
-      if (PENDING_REQUESTS < MAX_REQUESTS_COUNT) {
-        PENDING_REQUESTS++;
-        clearInterval(interval);
-        resolve(config);
-      }
-    }, INTERVAL_MS);
-  });
-});
-
-client.interceptors.response.use((response) => {
-  releaseRequestSlot();
-  return response;
-}, (err) => {
-  releaseRequestSlot();
-  return Promise.reject(err);
+  config.adapter = wrapAdapter(baseAdapterFor(config.adapter ?? client.defaults.adapter));
+  return config;
 });
 
 axiosRetry(client, {
@@ -89,6 +117,12 @@ client.interceptors.response.use((response) => {
 
   return response;
 }, (err) => {
+  // Queue pressure is a local condition, not a ThinQ failure. Reporting it as
+  // NotConnectedError would send discovery into a pointless reconnect loop.
+  if (err instanceof SemaphoreQueueFullError || err instanceof SemaphoreTimeoutError) {
+    return Promise.reject(err);
+  }
+
   if (!err.response) {
     throw errorWithCause(new NotConnectedError(responseErrorMessage(err, 'Network request failed.')), err);
   } else if (err.response.data?.resultCode === '9999') {
