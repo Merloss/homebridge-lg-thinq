@@ -63,12 +63,11 @@
       "default": false
     },
     "refresh_interval": {
-      "title": "Refresh interval (in second)",
+      "title": "Refresh interval (in seconds)",
+      "description": "How often device state is polled. ThinQ2 devices normally update over MQTT push, so polling is only a fallback for them. Values below 10 are raised to 10 to avoid LG rate limiting (HTTP 429).",
       "type": "number",
       "default": 60,
-      "condition": {
-        "functionBody": "return !!model.thinq1;"
-      }
+      "minimum": 10
     },
     "devices": {
       "title": "Devices",

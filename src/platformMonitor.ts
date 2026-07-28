@@ -57,17 +57,31 @@ export async function pollThinQ1Accessories(options: {
   accessories: PlatformAccessory<AccessoryContext>[];
   events: EventEmitter;
   enableThinQ1: boolean;
+  log?: Logging;
 }): Promise<void> {
-  const { thinq, accessories, events, enableThinQ1 } = options;
+  const { thinq, accessories, events, enableThinQ1, log } = options;
 
   for (const accessory of accessories) {
     const device: Device = accessory.context.device;
-    if (device.platform === PlatformType.ThinQ1 && enableThinQ1) {
+    if (device.platform !== PlatformType.ThinQ1 || !enableThinQ1) {
+      continue;
+    }
+
+    try {
       const deviceWithSnapshot = await thinq.pollMonitor(device);
       const snapshot = deviceWithSnapshot.snapshot;
       if (snapshot && snapshot.raw !== null) {
         events.emit(device.id, snapshot);
       }
+    } catch (err) {
+      // ManualProcessNeeded must reach the caller so it can stop the poll loop
+      // entirely; every other device error is isolated so one unreachable
+      // appliance cannot stop the rest of the account from updating.
+      if (err instanceof ManualProcessNeeded) {
+        throw err;
+      }
+
+      log?.debug('[' + device.name + '] ThinQ1 poll failed:', err);
     }
   }
 }
@@ -91,6 +105,7 @@ export function handleThinQ1PollError(options: {
   const { err, log, interval, monitorIntervals } = options;
 
   if (!(err instanceof ManualProcessNeeded)) {
+    log.debug('ThinQ1 polling failed:', err);
     return false;
   }
 
@@ -106,20 +121,37 @@ export async function startThinQ2Monitor(options: {
   thinq: MonitorThinQ;
   events: EventEmitter;
   intervalTime: number;
+  mqttFallbackIntervalTime: number;
   monitorIntervals: MonitorInterval[];
-}): Promise<void> {
-  const { log, thinq, events, intervalTime, monitorIntervals } = options;
+}): Promise<boolean> {
+  const { log, thinq, events, intervalTime, mqttFallbackIntervalTime, monitorIntervals } = options;
+
+  log.info('Start MQTT listener for ThinQ2 devices');
+  // MQTT is registered before the poll timer so we know whether polling is the
+  // primary update path or just a slow reconciliation pass. Polling at the full
+  // rate on top of a working push channel is what drove accounts into HTTP 429.
+  const mqttConnected = await thinq.registerMQTTListener((data) => {
+    emitThinQ2MqttUpdate(events, data);
+  });
+
+  const pollInterval = mqttConnected ? mqttFallbackIntervalTime : intervalTime;
+
+  if (mqttConnected) {
+    log.debug('MQTT push is active; polling ThinQ2 devices every ' + Math.round(pollInterval / 1000) + 's as a fallback.');
+  } else {
+    log.warn('MQTT push channel unavailable. Falling back to polling ThinQ2 devices every '
+      + Math.round(pollInterval / 1000) + 's.');
+  }
+
   const thinq2Interval = setInterval(() => {
     pollThinQ2Devices({ thinq, events }).catch(err => {
       log.debug('ThinQ2 polling failed:', err);
     });
-  }, intervalTime);
+  }, pollInterval);
+  thinq2Interval.unref?.();
   monitorIntervals.push(thinq2Interval);
 
-  log.info('Start MQTT listener for ThinQ2 devices');
-  await thinq.registerMQTTListener((data) => {
-    emitThinQ2MqttUpdate(events, data);
-  });
+  return mqttConnected;
 }
 
 export function startThinQ1Monitor(options: {
@@ -156,6 +188,7 @@ export function startThinQ1Monitor(options: {
         accessories,
         events,
         enableThinQ1,
+        log,
       });
     } catch (err) {
       handleThinQ1PollError({
@@ -166,6 +199,7 @@ export function startThinQ1Monitor(options: {
       });
     }
   }, intervalTime);
+  interval.unref?.();
   monitorIntervals.push(interval);
 }
 

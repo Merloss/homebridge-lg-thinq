@@ -7,7 +7,7 @@ import { Gateway } from './Gateway.js';
 import { requestClient } from './request.js';
 import { Auth } from './Auth.js';
 import { WorkId } from './ThinQ.js';
-import { ManualProcessNeeded, MonitorError, NotConnectedError, TokenExpiredError } from '../errors/index.js';
+import { ManualProcessNeeded, MonitorError, NotConnectedError, RateLimitError, TokenExpiredError } from '../errors/index.js';
 import crypto from 'crypto';
 import axios, { Method } from 'axios';
 import { Logger } from 'homebridge';
@@ -49,6 +49,9 @@ export class API {
   protected password!: string;
 
   public client_id!: string;
+
+  /** Optional store used to keep `client_id` stable across restarts. */
+  public clientIdStore?: { cacheForever(key: string, callable: () => Promise<any>): Promise<any> };
 
   public httpClient = requestClient;
 
@@ -145,6 +148,12 @@ export class API {
           throw err;
         }
 
+        // Rate limiting must propagate: swallowing it here would let the poll
+        // loop keep hammering LG at the same cadence that triggered the throttle.
+        if (err instanceof RateLimitError) {
+          throw err;
+        }
+
         if (axios.isAxiosError(err)) {
           this.logger.error('axios request error: ', err.response?.data, data);
           this.logger.error(err.stack || 'No stack error');
@@ -219,7 +228,7 @@ export class API {
   }
 
   public async getSingleDevice(device_id: string) {
-    return await this.getRequest('service/devices/' + device_id).then(data => data.result);
+    return await this.getRequest('service/devices/' + device_id).then(data => data?.result);
   }
 
   /**
@@ -232,9 +241,18 @@ export class API {
     const devices: Record<string, any>[] = [];
 
     // Retrieve devices for each home
-    for (let i = 0; i < homes.length; i++) {
-      const resp = await this.getRequest('service/homes/' + homes[i].homeId);
-      devices.push(...resp.result.devices);
+    for (const home of homes) {
+      const resp = await this.getRequest('service/homes/' + home.homeId);
+      const homeDevices = resp?.result?.devices;
+
+      // `request()` returns {} for handled failures, so a missing device list
+      // here means "this home could not be read", not "this home is empty".
+      if (!Array.isArray(homeDevices)) {
+        this.logger.warn('Could not read the device list for home ' + home.homeId + ', skipping it this round.');
+        continue;
+      }
+
+      devices.push(...homeDevices);
     }
 
     return devices;
@@ -246,10 +264,20 @@ export class API {
    * @returns A promise resolving to an array of homes.
    */
   public async getListHomes() {
-    if (!this._homes) {
-      this._homes = await this.getRequest('service/homes').then(data => data.result.item);
+    if (Array.isArray(this._homes) && this._homes.length) {
+      return this._homes;
     }
 
+    const item = await this.getRequest('service/homes').then(data => data?.result?.item);
+
+    if (!Array.isArray(item)) {
+      // Do not cache a failed lookup, otherwise one transient error would leave
+      // the plugin permanently convinced the account has no homes.
+      this.logger.warn('LG ThinQ returned no home list. Will retry on the next refresh.');
+      return [];
+    }
+
+    this._homes = item;
     return this._homes;
   }
 
@@ -394,12 +422,27 @@ export class API {
     }
 
     if (!this.client_id) {
-      const hash = crypto.createHash('sha256');
-      this.client_id = hash.update(this.userNumber + (new Date()).getTime()).digest('hex');
+      const generate = () => crypto.createHash('sha256')
+        .update(this.userNumber + (new Date()).getTime())
+        .digest('hex');
+
+      // Persist the client id so restarts reuse the same MQTT/AWS IoT identity.
+      // Regenerating it every launch registered a fresh client with LG each
+      // time, which is what eventually got busy accounts throttled.
+      this.client_id = this.clientIdStore
+        ? await this.clientIdStore.cacheForever('client_id', async () => generate())
+        : generate();
     }
   }
 
   public async refreshNewToken(session: Session | null = null) {
+    if (!this.auth) {
+      // Can happen when a token expires on the very first request, before
+      // ready() has constructed Auth. Build it from the gateway we already have.
+      this.auth = new Auth(await this.gateway(), this.logger);
+      this.auth.logger = this.logger;
+    }
+
     session = session || this.session;
     this.session = await this.auth.refreshNewToken(session);
 

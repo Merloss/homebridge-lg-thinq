@@ -197,7 +197,7 @@ describe('platform monitor helpers', () => {
     const monitorIntervals: ReturnType<typeof setInterval>[] = [];
     events.on('mqtt-device', listener);
 
-    await startThinQ2Monitor({
+    const connected = await startThinQ2Monitor({
       log,
       thinq: fakeMonitorThinQ({
         devices: jest.fn(async () => []),
@@ -206,19 +206,84 @@ describe('platform monitor helpers', () => {
             deviceId: 'mqtt-device',
             data: { state: { reported: { fan: 'low' } } },
           });
+          return true;
         }),
       }),
       events,
       intervalTime: 1000,
+      mqttFallbackIntervalTime: 600000,
       monitorIntervals,
     });
 
+    expect(connected).toBe(true);
     expect(monitorIntervals).toHaveLength(1);
     expect(log.info).toHaveBeenCalledWith('Start MQTT listener for ThinQ2 devices');
     expect(listener).toHaveBeenCalledWith({ fan: 'low' });
 
     clearMonitorIntervals(monitorIntervals);
     expect(monitorIntervals).toEqual([]);
+  });
+
+  test('polls at the fallback cadence when MQTT is connected', async () => {
+    const log = fakeLog();
+    const events = new EventEmitter();
+    const monitorIntervals: ReturnType<typeof setInterval>[] = [];
+    const devices = jest.fn(async () => []);
+
+    jest.useFakeTimers();
+    try {
+      await startThinQ2Monitor({
+        log,
+        thinq: fakeMonitorThinQ({
+          devices,
+          registerMQTTListener: jest.fn(async () => true),
+        }),
+        events,
+        intervalTime: 1000,
+        mqttFallbackIntervalTime: 600000,
+        monitorIntervals,
+      });
+
+      jest.advanceTimersByTime(60000);
+      expect(devices).not.toHaveBeenCalled();
+
+      jest.advanceTimersByTime(600000);
+      expect(devices).toHaveBeenCalledTimes(1);
+    } finally {
+      clearMonitorIntervals(monitorIntervals);
+      jest.useRealTimers();
+    }
+  });
+
+  test('warns and polls at full rate when MQTT never connects', async () => {
+    const log = fakeLog();
+    const events = new EventEmitter();
+    const monitorIntervals: ReturnType<typeof setInterval>[] = [];
+    const devices = jest.fn(async () => []);
+
+    jest.useFakeTimers();
+    try {
+      const connected = await startThinQ2Monitor({
+        log,
+        thinq: fakeMonitorThinQ({
+          devices,
+          registerMQTTListener: jest.fn(async () => false),
+        }),
+        events,
+        intervalTime: 1000,
+        mqttFallbackIntervalTime: 600000,
+        monitorIntervals,
+      });
+
+      expect(connected).toBe(false);
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('MQTT push channel unavailable'));
+
+      jest.advanceTimersByTime(1000);
+      expect(devices).toHaveBeenCalledTimes(1);
+    } finally {
+      clearMonitorIntervals(monitorIntervals);
+      jest.useRealTimers();
+    }
   });
 
   test('starts and clears ThinQ1 monitor resources', () => {

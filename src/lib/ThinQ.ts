@@ -15,7 +15,12 @@ import {
   prepareMqttConnection,
   retryMqttRegistration,
 } from './mqttCertificate.js';
-import { wireMqttDeviceEvents } from './mqttConnection.js';
+import {
+  createMqttReconnectState,
+  MqttReconnectState,
+  stopMqttReconnect,
+  wireMqttDeviceEvents,
+} from './mqttConnection.js';
 import {
   pollThinQ1MonitorResult,
   registerThinQ1WorkId,
@@ -30,6 +35,7 @@ export class ThinQ {
   protected workIds: WorkIdRegistry = {};
   protected deviceModel: Record<string, DeviceModel> = {};
   protected persist;
+  protected mqttReconnectState?: MqttReconnectState;
   constructor(
     public readonly platform: LGThinQHomebridgePlatform,
     public readonly config: PlatformConfig,
@@ -148,8 +154,12 @@ export class ThinQ {
     }
   }
 
-  public async registerMQTTListener(callback: (data: any) => void) {
-    await retryMqttRegistration({
+  /**
+   * @returns true when the MQTT push channel came up. Callers use this to decide
+   *          whether polling is a fallback or the only source of updates.
+   */
+  public async registerMQTTListener(callback: (data: any) => void): Promise<boolean> {
+    return await retryMqttRegistration({
       register: () => this._registerMQTTListener(callback),
       logger: this.logger,
     });
@@ -161,6 +171,11 @@ export class ThinQ {
       persist: this.persist,
       logger: this.logger,
     });
+
+    // One state object for the whole reconnect chain, so retries survive across
+    // connection generations instead of dying with the device that failed.
+    this.mqttReconnectState = createMqttReconnectState();
+    const reconnectState = this.mqttReconnectState;
 
     const connectToMqtt = async () => {
       const mqttDir = Path.join(this.platform.api.user.storagePath(), PLUGIN_NAME, 'persist', 'mqtt');
@@ -181,6 +196,7 @@ export class ThinQ {
         subscriptions: connection.subscriptions,
         onMessage: callback,
         reconnect: connectToMqtt,
+        state: reconnectState,
       });
     };
 
@@ -188,8 +204,16 @@ export class ThinQ {
     await connectToMqtt();
   }
 
+  /** Stops the MQTT reconnect chain. Called on Homebridge shutdown. */
+  public stopMQTTListener() {
+    if (this.mqttReconnectState) {
+      stopMqttReconnect(this.mqttReconnectState);
+    }
+  }
+
   public async isReady() {
     await this.persist.init();
+    this.api.clientIdStore = this.persist;
     await this.api.ready();
   }
 }

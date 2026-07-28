@@ -1,6 +1,6 @@
 import type { Logging, PlatformConfig } from 'homebridge';
 import { Helper } from './helper.js';
-import { NotConnectedError } from './errors/index.js';
+import { NotConnectedError, RateLimitError } from './errors/index.js';
 import type { Device } from './lib/Device.js';
 import { PlatformType } from './lib/constants.js';
 import type { ThinQ } from './lib/ThinQ.js';
@@ -8,6 +8,8 @@ import type { DeviceAccessoryConstructor } from './platformAccessories.js';
 import { isDeviceEnabled } from './platformConfig.js';
 
 export const DISCOVERY_RETRY_DELAY_MS = 30000;
+export const DISCOVERY_RATE_LIMIT_DELAY_MS = 300000;
+export const MAX_DISCOVERY_RETRY_DELAY_MS = 900000;
 
 export type DeviceAccessoryResolver = {
   make(device: Device): DeviceAccessoryConstructor | null;
@@ -33,7 +35,24 @@ const defaultDeviceAccessoryResolver: DeviceAccessoryResolver = {
 };
 
 export function isRetryableDiscoveryError(err: unknown): boolean {
-  return err instanceof NotConnectedError;
+  return err instanceof NotConnectedError || err instanceof RateLimitError;
+}
+
+/**
+ * Delay before the next discovery attempt. Retrying a throttled account every
+ * 30s just extends the throttle, so rate limiting backs off much further and
+ * honours `Retry-After` when LG provides it.
+ */
+export function discoveryRetryDelayMs(err: unknown, attempt = 1): number {
+  if (!(err instanceof RateLimitError)) {
+    return DISCOVERY_RETRY_DELAY_MS;
+  }
+
+  const base = err.retryAfterMs !== null && err.retryAfterMs > 0
+    ? err.retryAfterMs
+    : DISCOVERY_RATE_LIMIT_DELAY_MS;
+
+  return Math.min(base * Math.max(1, attempt), MAX_DISCOVERY_RETRY_DELAY_MS);
 }
 
 export function unregisterUnsupportedDevice(options: {

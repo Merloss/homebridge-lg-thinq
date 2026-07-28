@@ -1,5 +1,10 @@
 # Ignore source code
 src
+
+# Deployment artefacts, not part of the published package
+Dockerfile
+docker-compose.yml
+.dockerignore
 jest.config.ts
 dist/**/*.spec.*
 dist/**/__tests__
