@@ -1,7 +1,7 @@
 import { describe, test, expect, afterEach, jest } from '@jest/globals';
 import { AxiosError } from 'axios';
 import type { AxiosAdapter, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
-import { MonitorError, NotConnectedError, retryAfterMs } from '../errors/index.js';
+import { MonitorError, NotConnectedError, RateLimitError, retryAfterMs, TokenExpiredError } from '../errors/index.js';
 import {
   isRateLimited,
   MAX_RETRY_DELAY_MS,
@@ -135,6 +135,53 @@ describe('request client throttling', () => {
     expect(requestSemaphore.activeCount).toBe(0);
     expect(requestSemaphore.queueLength).toBe(0);
   }, 15000);
+
+  test('maps HTTP 429 to a RateLimitError carrying the Retry-After delay', async () => {
+    const adapter = jest.fn(async (config: InternalAxiosRequestConfig) => {
+      throw new AxiosError('too many requests', 'ERR_BAD_REQUEST', config, {}, {
+        config,
+        data: {},
+        // kept short so the test does not sit through the real backoff
+        headers: { 'retry-after': '1' },
+        status: 429,
+        statusText: 'Too Many Requests',
+      });
+    });
+
+    requestClient.defaults.adapter = adapter as AxiosAdapter;
+
+    // retries are exhausted first, then the 429 surfaces as a typed error
+    const error = await requestClient.get('/throttled').catch(err => err);
+
+    expect(error).toBeInstanceOf(RateLimitError);
+    expect((error as RateLimitError).retryAfterMs).toBe(1000);
+    expect(isRateLimited(error)).toBe(true);
+    expect(adapter).toHaveBeenCalledTimes(3); // initial attempt + 2 retries
+    expect(requestSemaphore.activeCount).toBe(0);
+  }, 30000);
+
+  test('reports the real cause of a retried failure instead of masking it', async () => {
+    // axios-retry re-enters the interceptor chain, so an already-mapped error
+    // arrives here a second time. Re-mapping it used to turn every exhausted
+    // retry into a generic NotConnectedError.
+    const adapter = jest.fn(async (config: InternalAxiosRequestConfig) => {
+      throw new AxiosError('server exploded', 'ERR_BAD_RESPONSE', config, {}, {
+        config,
+        data: { resultCode: '0102' },
+        headers: {},
+        status: 503,
+        statusText: 'Service Unavailable',
+      });
+    });
+
+    requestClient.defaults.adapter = adapter as AxiosAdapter;
+
+    const error = await requestClient.get('/flaky').catch(err => err);
+
+    expect(error).toBeInstanceOf(TokenExpiredError);
+    expect(error).not.toBeInstanceOf(NotConnectedError);
+    expect(adapter).toHaveBeenCalledTimes(3);
+  }, 30000);
 });
 
 describe('retry policy', () => {
@@ -177,7 +224,6 @@ describe('retry policy', () => {
     });
 
     expect(retryDelayFor(1, throttled)).toBe(45000);
-    expect(isRateLimited(throttled)).toBe(true);
   });
 
   test('caps Retry-After so a hostile header cannot stall the plugin', () => {

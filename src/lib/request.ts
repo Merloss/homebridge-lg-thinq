@@ -140,8 +140,10 @@ axiosRetry(client, {
 
 client.interceptors.response.use((response) => {
   // thinq1 response
-  if (typeof response.data === 'object' && 'lgedmRoot' in response.data && 'returnCd' in response.data.lgedmRoot) {
-    const data = response.data.lgedmRoot;
+  const body = response.data;
+  if (typeof body === 'object' && body !== null && 'lgedmRoot' in body
+    && typeof body.lgedmRoot === 'object' && body.lgedmRoot !== null && 'returnCd' in body.lgedmRoot) {
+    const data = body.lgedmRoot;
     const code = data.returnCd as string;
     if (NotConnectedErrorCodes.includes(code)) {
       throw new NotConnectedError(data.returnMsg || '');
@@ -154,9 +156,21 @@ client.interceptors.response.use((response) => {
 
   return response;
 }, (err) => {
-  // Queue pressure is a local condition, not a ThinQ failure. Reporting it as
-  // NotConnectedError would send discovery into a pointless reconnect loop.
-  if (err instanceof SemaphoreQueueFullError || err instanceof SemaphoreTimeoutError) {
+  // Already-mapped errors must pass straight through.
+  //
+  // axios-retry re-dispatches through the whole interceptor chain, so a retried
+  // request's inner rejection reaches this handler a second time. Our domain
+  // errors carry no `response`, so re-mapping them turned every exhausted retry
+  // — a 500, a 429, an expired token — into a generic NotConnectedError and hid
+  // the real cause. Queue-pressure errors are local conditions and are passed
+  // through for the same reason.
+  if (err instanceof NotConnectedError
+    || err instanceof RateLimitError
+    || err instanceof TokenExpiredError
+    || err instanceof ManualProcessNeeded
+    || err instanceof MonitorError
+    || err instanceof SemaphoreQueueFullError
+    || err instanceof SemaphoreTimeoutError) {
     return Promise.reject(err);
   }
 
