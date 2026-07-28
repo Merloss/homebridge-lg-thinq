@@ -14,7 +14,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: homebridge
     restart: unless-stopped
     network_mode: host
     environment:
@@ -23,9 +22,16 @@ services:
       # the host itself, so make sure nothing else is using it.
       HOMEBRIDGE_CONFIG_UI_PORT: 8581
     volumes:
-      # Config, accessory cache, persisted tokens and MQTT certificates.
-      # Losing this means re-pairing the bridge in the Home app.
-      - homebridge-data:/var/lib/homebridge
+      # Config, accessory cache, installed plugins, persisted LG tokens and MQTT
+      # certificates. Losing this means re-pairing the bridge in the Home app.
+      #
+      # The mount point is /homebridge, not /var/lib/homebridge. The latter is a
+      # symlink the image creates at startup; mounting over it stops that
+      # symlink from ever being created.
+      #
+      # Replace this named volume with your existing path if you already run
+      # Homebridge, e.g.  - /srv/homebridge:/homebridge
+      - homebridge-data:/homebridge
 
 volumes:
   homebridge-data:

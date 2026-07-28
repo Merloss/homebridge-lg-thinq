@@ -1,15 +1,16 @@
 # Homebridge with this plugin baked into the image.
 #
 # The plugin is built from the build context - the files Dokploy (or any other
-# CI) already checked out - rather than fetched from GitHub. That keeps the
-# build working with a private repository and without putting any credential
-# inside the image.
+# CI) has already checked out - rather than fetched from GitHub. That keeps the
+# build working with a private repository and puts no credential in the image.
 #
-# Baking it in is also what makes it survive: a redeploy recreates the
-# container, so anything installed by hand through the Homebridge UI terminal is
-# gone the next time you press Deploy.
+# It is not installed into the global node_modules, even though that would be
+# the obvious place: the homebridge/homebridge image runs Homebridge with
+# `--strict-plugin-resolution`, which makes it ignore everything outside
+# /var/lib/homebridge/node_modules. That path is inside the data volume, so the
+# entrypoint copies the plugin there on start. See docker/sync-plugin.sh.
 
-# ---------- build the plugin ----------
+# ---------- build and pack the plugin ----------
 FROM node:22-alpine AS build
 
 WORKDIR /src
@@ -24,21 +25,28 @@ COPY . .
 # `prepare` trigger a second, identical build.
 RUN mkdir -p /out && npm run build && npm pack --ignore-scripts --pack-destination /out
 
+# ---------- verify the packed plugin actually loads ----------
+FROM node:22-alpine AS verify
+
+COPY --from=build /out/*.tgz /tmp/plugin.tgz
+# Fail the build, not the deploy, if the package is unusable.
+RUN mkdir -p /check && cd /check && npm init -y >/dev/null \
+ && npm install --omit=dev --no-audit --no-fund /tmp/plugin.tgz \
+ && test -f node_modules/homebridge-lg-thinq/config.schema.json \
+ && node -e "require('homebridge-lg-thinq')" \
+ && echo "packed plugin loads cleanly" > /verified
+
 # ---------- final image ----------
 FROM homebridge/homebridge:latest
 
-COPY --from=build /out/*.tgz /tmp/plugin.tgz
+# Copied so BuildKit cannot prune the verify stage as unreachable.
+COPY --from=verify /verified /opt/lg-thinq/.verified
+COPY --from=build /out/*.tgz /opt/lg-thinq/homebridge-lg-thinq.tgz
+# Tie the install to this exact build so a rebuilt image refreshes it and an
+# unchanged one does not reinstall on every container start.
+RUN sha256sum /opt/lg-thinq/homebridge-lg-thinq.tgz | cut -d' ' -f1 > /opt/lg-thinq/build-stamp
 
-# Installed globally on purpose: /var/lib/homebridge is a volume mount at
-# runtime, so anything written there during the build is shadowed by the volume
-# and effectively discarded. Global node_modules is part of the image and
-# survives, and Homebridge scans it for plugins just the same.
-RUN npm install -g /tmp/plugin.tgz \
- && rm -f /tmp/plugin.tgz \
- && npm cache clean --force \
- && rm -rf /root/.npm
+COPY docker/sync-plugin.sh /usr/local/bin/sync-plugin.sh
+RUN chmod +x /usr/local/bin/sync-plugin.sh
 
-# Fail the build rather than the deploy if the plugin did not actually land.
-# Global packages are not on Node's default resolution path, so check the file.
-RUN test -f "$(npm root -g)/homebridge-lg-thinq/dist/index.js" \
- && echo "homebridge-lg-thinq installed at $(npm root -g)/homebridge-lg-thinq"
+ENTRYPOINT ["/usr/local/bin/sync-plugin.sh"]
