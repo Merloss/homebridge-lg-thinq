@@ -1,14 +1,44 @@
 import { describe, expect, jest, test } from '@jest/globals';
 import type { PlatformConfig } from 'homebridge';
-import { NotConnectedError } from './errors/index.js';
+import { NotConnectedError, RateLimitError } from './errors/index.js';
 import type { Device } from './lib/Device.js';
 import { PlatformType } from './lib/constants.js';
 import {
+  DISCOVERY_RATE_LIMIT_DELAY_MS,
   DISCOVERY_RETRY_DELAY_MS,
+  discoveryRetryDelayMs,
   isRetryableDiscoveryError,
+  MAX_DISCOVERY_RETRY_DELAY_MS,
   prepareDiscoveredDevice,
   unregisterUnsupportedDevice,
 } from './platformDiscovery.js';
+
+describe('discovery retry backoff', () => {
+  test('treats rate limiting as retryable', () => {
+    expect(isRetryableDiscoveryError(new RateLimitError('slow down'))).toBe(true);
+    expect(isRetryableDiscoveryError(new NotConnectedError('offline'))).toBe(true);
+    expect(isRetryableDiscoveryError(new Error('bad config'))).toBe(false);
+  });
+
+  test('uses the short delay for ordinary connectivity failures', () => {
+    expect(discoveryRetryDelayMs(new NotConnectedError('offline'))).toBe(DISCOVERY_RETRY_DELAY_MS);
+    expect(discoveryRetryDelayMs(new NotConnectedError('offline'), 5)).toBe(DISCOVERY_RETRY_DELAY_MS);
+  });
+
+  test('backs off much further when throttled, since retrying extends the throttle', () => {
+    expect(discoveryRetryDelayMs(new RateLimitError('slow down'))).toBe(DISCOVERY_RATE_LIMIT_DELAY_MS);
+    expect(discoveryRetryDelayMs(new RateLimitError('slow down'), 2)).toBe(DISCOVERY_RATE_LIMIT_DELAY_MS * 2);
+  });
+
+  test('prefers the Retry-After delay LG supplied', () => {
+    expect(discoveryRetryDelayMs(new RateLimitError('slow down', 90000))).toBe(90000);
+  });
+
+  test('caps the backoff so discovery always resumes eventually', () => {
+    expect(discoveryRetryDelayMs(new RateLimitError('slow down'), 99)).toBe(MAX_DISCOVERY_RETRY_DELAY_MS);
+    expect(discoveryRetryDelayMs(new RateLimitError('slow down', 86400000))).toBe(MAX_DISCOVERY_RETRY_DELAY_MS);
+  });
+});
 
 class FakeDeviceHandler {}
 

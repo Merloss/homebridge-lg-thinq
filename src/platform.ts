@@ -24,10 +24,11 @@ import {
   refreshIntervalMs,
 } from './platformConfig.js';
 import {
-  DISCOVERY_RETRY_DELAY_MS,
+  discoveryRetryDelayMs,
   isRetryableDiscoveryError,
   prepareDiscoveredDevice,
 } from './platformDiscovery.js';
+import { RateLimitError } from './errors/index.js';
 import {
   accessoriesForPlatform,
   clearMonitorIntervals,
@@ -56,6 +57,8 @@ export class LGThinQHomebridgePlatform implements DynamicPlatformPlugin {
   private readonly deviceUpdateListeners: DeviceUpdateListenerMap = {};
   private readonly monitorIntervals: MonitorInterval[] = [];
   private readonly intervalTime: number;
+  private readonly retryTimers: ReturnType<typeof setTimeout>[] = [];
+  private discoveryAttempt = 1;
   private monitorStarted = false;
 
   // Enable ThinQ1 support
@@ -88,13 +91,25 @@ export class LGThinQHomebridgePlatform implements DynamicPlatformPlugin {
       return;
     }
 
-    const didFinishLaunching = () => {
+    const didFinishLaunching = (attempt = 1) => {
       // Discover and register devices after the platform is ready
       this.ThinQ.isReady().then(() => {
         this.log.info('Successfully connected to the ThinQ API.');
         this.discoverDevicesWithRetry();
       }).catch(err => {
         this.logThinQReadyError(err);
+
+        // A transient failure at boot (no network yet, LG throttling) used to
+        // leave the platform permanently dead until Homebridge was restarted.
+        if (!isRetryableDiscoveryError(err) && err?.code?.indexOf('ECONN') !== 0) {
+          return;
+        }
+
+        const delay = discoveryRetryDelayMs(err, attempt);
+        this.log.info('Retrying the ThinQ connection in ' + Math.round(delay / 1000) + 's.');
+        const timer = setTimeout(() => didFinishLaunching(attempt + 1), delay);
+        timer.unref?.();
+        this.retryTimers.push(timer);
       });
     };
 
@@ -126,15 +141,27 @@ export class LGThinQHomebridgePlatform implements DynamicPlatformPlugin {
     this.accessories.push(accessory as PlatformAccessory<AccessoryContext>);
   }
 
-  private discoverDevicesWithRetry(): void {
+  private discoverDevicesWithRetry(attempt = 1): void {
     this.discoverDevices().then(async () => {
+      this.discoveryAttempt = 1;
       await this.startMonitor();
     }).catch(err => {
       if (isRetryableDiscoveryError(err)) {
-        // Retry device discovery after 30 seconds if the ThinQ monitor has not connected yet.
-        setTimeout(() => {
-          this.discoverDevicesWithRetry();
-        }, DISCOVERY_RETRY_DELAY_MS);
+        const delay = discoveryRetryDelayMs(err, attempt);
+        this.discoveryAttempt = attempt + 1;
+
+        if (err instanceof RateLimitError) {
+          this.log.warn('LG ThinQ is rate limiting this account. Retrying discovery in '
+            + Math.round(delay / 1000) + 's. Consider increasing "refresh_interval".');
+        } else {
+          this.log.debug('ThinQ not reachable yet, retrying discovery in ' + Math.round(delay / 1000) + 's.');
+        }
+
+        const timer = setTimeout(() => {
+          this.discoverDevicesWithRetry(this.discoveryAttempt);
+        }, delay);
+        timer.unref?.();
+        this.retryTimers.push(timer);
         return;
       }
 
@@ -169,43 +196,30 @@ export class LGThinQHomebridgePlatform implements DynamicPlatformPlugin {
       this.log.warn('No ThinQ devices in your account.');
     }
 
+    const failed: string[] = [];
+
     for (const device of devices) {
-      applyConfiguredDeviceOverrides(this.config, device);
-      this.log.debug('Device [' + device.name + ']: ', device.toString());
-      this.log.debug(JSON.stringify(device.data));
+      // Each device is set up in isolation. Previously a single unsupported or
+      // malformed appliance threw out of this loop, so every device after it in
+      // the account was silently never registered.
+      try {
+        await this.discoverDevice(device, pendingIds);
+      } catch (err) {
+        if (isRetryableDiscoveryError(err)) {
+          // The account itself is unreachable; let the caller retry the round.
+          throw err;
+        }
 
-      const preparedDevice = await prepareDiscoveredDevice({
-        log: this.log,
-        config: this.config,
-        enableThinQ1: this.enable_thinq1,
-        thinq: this.ThinQ,
-        device,
-      });
-      if (preparedDevice.status !== 'ready') {
-        continue;
+        failed.push(device.name || device.id);
+        this.log.error('[' + (device.name || device.id) + '] Failed to set up device, skipping it: '
+          + ((err as Error)?.message ?? err));
+        this.log.debug(err as any);
       }
+    }
 
-      const lgThinQDevice = createOrRestoreDeviceAccessory({
-        platform: this,
-        api: this.api,
-        log: this.log,
-        accessories: this.accessories,
-        pendingIds,
-        device,
-        accessoryType: preparedDevice.accessoryType,
-        category: preparedDevice.category,
-      });
-
-      // Bind the update event for the device
-      bindDeviceUpdateListener(
-        this.events,
-        this.deviceUpdateListeners,
-        device.id,
-        lgThinQDevice.update.bind(lgThinQDevice),
-      );
-
-      // Perform the first-time update
-      lgThinQDevice.updateAccessoryCharacteristic(device);
+    if (failed.length) {
+      this.log.warn('Skipped ' + failed.length + ' device(s) that could not be set up: ' + failed.join(', ')
+        + '. The remaining devices are unaffected.');
     }
 
     // Remove accessories that are no longer present in the ThinQ API
@@ -217,6 +231,46 @@ export class LGThinQHomebridgePlatform implements DynamicPlatformPlugin {
       listeners: this.deviceUpdateListeners,
       pendingIds,
     });
+  }
+
+  /** Discovers and registers a single device. Throws only for that device. */
+  private async discoverDevice(device: Device, pendingIds: Set<string>): Promise<void> {
+    applyConfiguredDeviceOverrides(this.config, device);
+    this.log.debug('Device [' + device.name + ']: ', device.toString());
+    this.log.debug(JSON.stringify(device.data));
+
+    const preparedDevice = await prepareDiscoveredDevice({
+      log: this.log,
+      config: this.config,
+      enableThinQ1: this.enable_thinq1,
+      thinq: this.ThinQ,
+      device,
+    });
+    if (preparedDevice.status !== 'ready') {
+      return;
+    }
+
+    const lgThinQDevice = createOrRestoreDeviceAccessory({
+      platform: this,
+      api: this.api,
+      log: this.log,
+      accessories: this.accessories,
+      pendingIds,
+      device,
+      accessoryType: preparedDevice.accessoryType,
+      category: preparedDevice.category,
+    });
+
+    // Bind the update event for the device
+    bindDeviceUpdateListener(
+      this.events,
+      this.deviceUpdateListeners,
+      device.id,
+      lgThinQDevice.update.bind(lgThinQDevice),
+    );
+
+    // Perform the first-time update
+    lgThinQDevice.updateAccessoryCharacteristic(device);
   }
 
   /**
@@ -272,6 +326,13 @@ export class LGThinQHomebridgePlatform implements DynamicPlatformPlugin {
 
   protected stopMonitor() {
     clearMonitorIntervals(this.monitorIntervals);
+
+    while (this.retryTimers.length) {
+      const timer = this.retryTimers.pop();
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
 
     for (const deviceId of Object.keys(this.deviceUpdateListeners)) {
       removeDeviceUpdateListener(this.events, this.deviceUpdateListeners, deviceId);
