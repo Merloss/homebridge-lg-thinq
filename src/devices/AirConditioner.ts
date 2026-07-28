@@ -813,6 +813,7 @@ export default class AirConditioner extends BaseDevice {
     this.serviceSensor = accessory.getService(TemperatureSensor);
     if (this.config.ac_temperature_sensor as boolean) {
       this.serviceSensor = this.serviceSensor || accessory.addService(TemperatureSensor);
+      this.nameSubService(this.serviceSensor, 'Temperature');
       this.serviceSensor.updateCharacteristic(Characteristic.StatusActive, false);
       this.serviceSensor.addLinkedService(this.service);
     } else if (this.serviceSensor) {
@@ -832,6 +833,7 @@ export default class AirConditioner extends BaseDevice {
     this.serviceHumiditySensor = accessory.getService(HumiditySensor);
     if (this.config.ac_humidity_sensor as boolean) {
       this.serviceHumiditySensor = this.serviceHumiditySensor || accessory.addService(HumiditySensor);
+      this.nameSubService(this.serviceHumiditySensor, 'Humidity');
       this.serviceHumiditySensor.updateCharacteristic(Characteristic.StatusActive, false);
       this.serviceHumiditySensor.addLinkedService(this.service);
     } else if (this.serviceHumiditySensor) {
@@ -851,6 +853,7 @@ export default class AirConditioner extends BaseDevice {
     this.serviceLight = accessory.getService(Lightbulb);
     if (this.config.ac_led_control as boolean) {
       this.serviceLight = this.serviceLight || accessory.addService(Lightbulb);
+      this.nameSubService(this.serviceLight, 'Display Light');
       this.serviceLight.getCharacteristic(Characteristic.On)
         .onSet(this.setLight.bind(this))
         .updateValue(false); // off as default
@@ -916,7 +919,7 @@ export default class AirConditioner extends BaseDevice {
     this.serviceQuietMode = accessory.getService('Quiet mode');
     if (this.quietModeModels.includes(device.model)) {
       this.serviceQuietMode = this.serviceQuietMode || accessory.addService(Switch, 'Quiet mode', 'Quiet mode');
-      this.serviceQuietMode.updateCharacteristic(Characteristic.Name, 'Quiet mode');
+      this.nameSubService(this.serviceQuietMode, 'Quiet mode');
       this.serviceQuietMode.getCharacteristic(Characteristic.On)
         .onSet(this.setQuietModeActive.bind(this));
     } else if (this.serviceQuietMode) {
@@ -1022,6 +1025,24 @@ export default class AirConditioner extends BaseDevice {
     } = this.platform;
 
     this.serviceAirQuality = this.accessory.getService(AirQualitySensor) || this.accessory.addService(AirQualitySensor);
+    this.nameSubService(this.serviceAirQuality, 'Air Quality');
+  }
+
+  /**
+   * Gives a sub-service a stable, device-prefixed name.
+   *
+   * Without both `Name` and `ConfiguredName`, the Home app falls back to a
+   * generic label ("Sensor", "Light", "Switch"), which is indistinguishable once
+   * an accessory exposes several of them.
+   */
+  protected nameSubService(service: Service, label: string) {
+    const device: Device = this.accessory.context.device;
+    const { Characteristic } = this.platform;
+    const name = device.name + ' ' + label;
+
+    service.setCharacteristic(Characteristic.Name, name);
+    service.addOptionalCharacteristic(Characteristic.ConfiguredName);
+    service.setCharacteristic(Characteristic.ConfiguredName, name);
   }
 
   protected createHeaterCoolerService() {
