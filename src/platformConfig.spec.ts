@@ -5,10 +5,15 @@ import {
   configuredDeviceFor,
   configuredDeviceName,
   configuredDevices,
+  DEFAULT_REFRESH_INTERVAL_SECONDS,
   hasRequiredThinQConfig,
   isDeviceEnabled,
   isThinQ1Enabled,
+  MIN_REFRESH_INTERVAL_SECONDS,
+  MQTT_FALLBACK_INTERVAL_SECONDS,
   refreshIntervalMs,
+  refreshIntervalSeconds,
+  thinq2PollIntervalMs,
 } from './platformConfig.js';
 
 const config = (value: Record<string, unknown>): PlatformConfig => ({
@@ -50,8 +55,32 @@ describe('platform config helpers', () => {
   test('normalizes refresh intervals to milliseconds', () => {
     expect(refreshIntervalMs(config({ refresh_interval: 10 }))).toBe(10000);
     expect(refreshIntervalMs(config({ refresh_interval: '15' }))).toBe(15000);
-    expect(refreshIntervalMs(config({ refresh_interval: 0 }))).toBe(5000);
-    expect(refreshIntervalMs(config({ refresh_interval: 'bad' }))).toBe(5000);
+    expect(refreshIntervalMs(config({ refresh_interval: 0 }))).toBe(60000);
+    expect(refreshIntervalMs(config({ refresh_interval: 'bad' }))).toBe(60000);
+  });
+
+  test('defaults to a poll cadence LG does not rate limit', () => {
+    expect(refreshIntervalMs(config({}))).toBe(DEFAULT_REFRESH_INTERVAL_SECONDS * 1000);
+    expect(DEFAULT_REFRESH_INTERVAL_SECONDS).toBe(60);
+  });
+
+  test('raises intervals below the safe floor instead of honouring them', () => {
+    expect(refreshIntervalSeconds(config({ refresh_interval: 1 }))).toBe(MIN_REFRESH_INTERVAL_SECONDS);
+    expect(refreshIntervalSeconds(config({ refresh_interval: 5 }))).toBe(MIN_REFRESH_INTERVAL_SECONDS);
+    expect(refreshIntervalSeconds(config({ refresh_interval: 30 }))).toBe(30);
+  });
+
+  test('demotes ThinQ2 polling to a slow fallback once MQTT is connected', () => {
+    const value = config({ refresh_interval: 30 });
+
+    expect(thinq2PollIntervalMs(value, false)).toBe(30000);
+    expect(thinq2PollIntervalMs(value, true)).toBe(MQTT_FALLBACK_INTERVAL_SECONDS * 1000);
+  });
+
+  test('never polls faster than the configured interval, even as an MQTT fallback', () => {
+    const value = config({ refresh_interval: 1800 });
+
+    expect(thinq2PollIntervalMs(value, true)).toBe(1800000);
   });
 
   test('filters devices when configured ids are present', () => {

@@ -148,8 +148,12 @@ export class ThinQ {
     }
   }
 
-  public async registerMQTTListener(callback: (data: any) => void) {
-    await retryMqttRegistration({
+  /**
+   * @returns true when the MQTT push channel came up. Callers use this to decide
+   *          whether polling is a fallback or the only source of updates.
+   */
+  public async registerMQTTListener(callback: (data: any) => void): Promise<boolean> {
+    return await retryMqttRegistration({
       register: () => this._registerMQTTListener(callback),
       logger: this.logger,
     });

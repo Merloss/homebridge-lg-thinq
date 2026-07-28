@@ -22,6 +22,8 @@ import {
   hasRequiredThinQConfig,
   isThinQ1Enabled,
   refreshIntervalMs,
+  refreshIntervalSeconds,
+  thinq2PollIntervalMs,
 } from './platformConfig.js';
 import {
   discoveryRetryDelayMs,
@@ -296,7 +298,8 @@ export class LGThinQHomebridgePlatform implements DynamicPlatformPlugin {
           log: this.log,
           thinq: this.ThinQ,
           events: this.events,
-          intervalTime: this.intervalTime,
+          intervalTime: thinq2PollIntervalMs(this.config, false),
+          mqttFallbackIntervalTime: thinq2PollIntervalMs(this.config, true),
           monitorIntervals: this.monitorIntervals,
         });
       }
@@ -310,7 +313,7 @@ export class LGThinQHomebridgePlatform implements DynamicPlatformPlugin {
           accessories: this.accessories,
           events: this.events,
           intervalTime: this.intervalTime,
-          refreshInterval: this.config.refresh_interval,
+          refreshInterval: refreshIntervalSeconds(this.config),
           enableThinQ1: this.enable_thinq1,
           monitorIntervals: this.monitorIntervals,
         });
