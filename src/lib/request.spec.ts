@@ -1,8 +1,15 @@
 import { describe, test, expect, afterEach, jest } from '@jest/globals';
 import { AxiosError } from 'axios';
 import type { AxiosAdapter, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
-import { MonitorError, NotConnectedError } from '../errors/index.js';
-import { requestClient, requestSemaphore } from './request.js';
+import { MonitorError, NotConnectedError, retryAfterMs } from '../errors/index.js';
+import {
+  isRateLimited,
+  MAX_RETRY_DELAY_MS,
+  requestClient,
+  requestSemaphore,
+  retryDelayFor,
+  shouldRetry,
+} from './request.js';
 
 const originalAdapter = requestClient.defaults.adapter;
 
@@ -128,4 +135,100 @@ describe('request client throttling', () => {
     expect(requestSemaphore.activeCount).toBe(0);
     expect(requestSemaphore.queueLength).toBe(0);
   }, 15000);
+});
+
+describe('retry policy', () => {
+  test('retries throttling and server errors but not client mistakes', () => {
+    const errorWithStatus = (status: number) => new AxiosError('x', 'ERR', {} as any, {}, {
+      config: {} as any,
+      data: {},
+      headers: {},
+      status,
+      statusText: '',
+    });
+
+    expect(shouldRetry(errorWithStatus(429))).toBe(true);
+    expect(shouldRetry(errorWithStatus(503))).toBe(true);
+    expect(shouldRetry(errorWithStatus(400))).toBe(false);
+    expect(shouldRetry(errorWithStatus(401))).toBe(false);
+    expect(shouldRetry(errorWithStatus(404))).toBe(false);
+  });
+
+  test('retries dropped connections but never a cancelled request', () => {
+    const withCode = (code: string) => {
+      const err = new AxiosError('x', code);
+      (err as any).request = {};
+      return err;
+    };
+
+    expect(shouldRetry(withCode('ECONNRESET'))).toBe(true);
+    expect(shouldRetry(withCode('ETIMEDOUT'))).toBe(true);
+    expect(shouldRetry(withCode('ERR_CANCELED'))).toBe(false);
+    expect(shouldRetry(new AxiosError('never sent', 'ERR_INVALID_URL'))).toBe(false);
+  });
+
+  test('honours Retry-After on 429 instead of the exponential schedule', () => {
+    const throttled = new AxiosError('x', 'ERR', {} as any, {}, {
+      config: {} as any,
+      data: {},
+      headers: { 'retry-after': '45' },
+      status: 429,
+      statusText: '',
+    });
+
+    expect(retryDelayFor(1, throttled)).toBe(45000);
+    expect(isRateLimited(throttled)).toBe(true);
+  });
+
+  test('caps Retry-After so a hostile header cannot stall the plugin', () => {
+    const throttled = new AxiosError('x', 'ERR', {} as any, {}, {
+      config: {} as any,
+      data: {},
+      headers: { 'retry-after': '86400' },
+      status: 429,
+      statusText: '',
+    });
+
+    expect(retryDelayFor(1, throttled)).toBe(MAX_RETRY_DELAY_MS);
+  });
+
+  test('backs off exponentially with jitter when no Retry-After is given', () => {
+    const err = new AxiosError('x', 'ECONNRESET');
+
+    // full-jitter: delay lands in [base/2, base]
+    expect(retryDelayFor(1, err, () => 0)).toBe(1000);
+    expect(retryDelayFor(1, err, () => 1)).toBe(2000);
+    expect(retryDelayFor(2, err, () => 0)).toBe(2000);
+    expect(retryDelayFor(3, err, () => 0)).toBe(4000);
+  });
+
+  test('spreads simultaneous retries apart so devices do not retry in lockstep', () => {
+    const err = new AxiosError('x', 'ECONNRESET');
+    const delays = new Set([0.1, 0.4, 0.9].map(r => retryDelayFor(2, err, () => r)));
+
+    expect(delays.size).toBe(3);
+  });
+});
+
+describe('retryAfterMs', () => {
+  test('reads delay-seconds form', () => {
+    expect(retryAfterMs('30')).toBe(30000);
+    expect(retryAfterMs(30)).toBe(30000);
+  });
+
+  test('reads HTTP-date form relative to now', () => {
+    const now = Date.parse('2026-07-28T12:00:00Z');
+    expect(retryAfterMs('Tue, 28 Jul 2026 12:01:00 GMT', now)).toBe(60000);
+  });
+
+  test('never returns a negative delay for a date already in the past', () => {
+    const now = Date.parse('2026-07-28T12:00:00Z');
+    expect(retryAfterMs('Tue, 28 Jul 2026 11:00:00 GMT', now)).toBe(0);
+  });
+
+  test('returns null when the header is missing or unusable', () => {
+    expect(retryAfterMs(undefined)).toBeNull();
+    expect(retryAfterMs('')).toBeNull();
+    expect(retryAfterMs('soon')).toBeNull();
+  });
 });
