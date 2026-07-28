@@ -1,0 +1,31 @@
+# Homebridge with the patched LG ThinQ plugin, for Dokploy's "Compose" service.
+#
+# IMPORTANT - HomeKit needs to be on the same physical network as your iPhone.
+# HomeKit discovers bridges over mDNS/Bonjour, which does not cross routers or
+# the internet. If the machine running Dokploy is a cloud VPS, your phone will
+# never find this bridge. It has to run on a server on your home LAN (a NAS, a
+# mini PC, a Pi), or you need an L2 VPN with an mDNS reflector between them.
+#
+# network_mode: host is required for the same reason - Docker's default bridge
+# network does not forward the multicast traffic HomeKit relies on.
+
+services:
+  homebridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: homebridge
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TZ: Europe/Istanbul
+      # The Homebridge UI listens here. With host networking this is a port on
+      # the host itself, so make sure nothing else is using it.
+      HOMEBRIDGE_CONFIG_UI_PORT: 8581
+    volumes:
+      # Config, accessory cache, persisted tokens and MQTT certificates.
+      # Losing this means re-pairing the bridge in the Home app.
+      - homebridge-data:/var/lib/homebridge
+
+volumes:
+  homebridge-data:
