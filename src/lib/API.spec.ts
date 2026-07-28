@@ -1,8 +1,8 @@
 /* eslint-disable dot-notation */
 import { API } from './API.js';
-import { NotConnectedError } from '../errors/index.js';
+import { NotConnectedError, RateLimitError } from '../errors/index.js';
 import { Logger } from 'homebridge';
-import { beforeEach, describe, expect, jest, test } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 
 describe('API', () => {
   let api: API;
@@ -17,6 +17,12 @@ describe('API', () => {
     } as unknown as Logger;
 
     api = new API('EC', 'en-US', mockLogger);
+  });
+
+  // `httpClient` is the shared requestClient singleton, so spies installed on it
+  // survive across tests and their call counts accumulate unless restored.
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   test('should initialize with default values', () => {
@@ -63,6 +69,48 @@ describe('API', () => {
     jest.spyOn(api.httpClient, 'request').mockRejectedValueOnce(new NotConnectedError('offline'));
 
     await expect(api.getRequest('service/homes')).rejects.toThrow(NotConnectedError);
+  });
+
+  test('skips a home it cannot read instead of crashing the discovery round', async () => {
+    // request() returns {} for handled failures; reading .result.devices off
+    // that used to throw a TypeError that killed the whole poll cycle.
+    jest.spyOn(api, 'getListHomes').mockResolvedValueOnce([{ homeId: 'broken' }, { homeId: 'good' }]);
+    jest.spyOn(api.httpClient, 'request')
+      .mockResolvedValueOnce({ data: {} })
+      .mockResolvedValueOnce({ data: { result: { devices: [{ id: 'device1' }] } } });
+
+    await expect(api.getListDevices()).resolves.toEqual([{ id: 'device1' }]);
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('broken'));
+  });
+
+  test('does not cache a failed home lookup', async () => {
+    const request = jest.spyOn(api.httpClient, 'request')
+      .mockResolvedValueOnce({ data: {} })
+      .mockResolvedValueOnce({ data: { result: { item: [{ homeId: 'home1' }] } } });
+    api['_gateway'] = { thinq1_url: '', thinq2_url: 'https://example.com/' } as any;
+
+    await expect(api.getListHomes()).resolves.toEqual([]);
+    // A transient failure must not leave the account permanently "home-less".
+    await expect(api.getListHomes()).resolves.toEqual([{ homeId: 'home1' }]);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  test('caches a successful home lookup', async () => {
+    const request = jest.spyOn(api.httpClient, 'request')
+      .mockResolvedValue({ data: { result: { item: [{ homeId: 'home1' }] } } });
+    api['_gateway'] = { thinq1_url: '', thinq2_url: 'https://example.com/' } as any;
+
+    await api.getListHomes();
+    await api.getListHomes();
+
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  test('propagates rate limiting instead of swallowing it', async () => {
+    api['_gateway'] = { thinq1_url: '', thinq2_url: 'https://example.com/' } as any;
+    jest.spyOn(api.httpClient, 'request').mockRejectedValueOnce(new RateLimitError('slow down', 60000));
+
+    await expect(api.getRequest('service/homes')).rejects.toThrow(RateLimitError);
   });
 
   test('should send command to device', async () => {

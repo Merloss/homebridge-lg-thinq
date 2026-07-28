@@ -190,6 +190,7 @@ export class ThinQ {
 
   public async isReady() {
     await this.persist.init();
+    this.api.clientIdStore = this.persist;
     await this.api.ready();
   }
 }
