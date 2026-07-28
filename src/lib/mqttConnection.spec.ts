@@ -1,7 +1,11 @@
 import { describe, expect, jest, test } from '@jest/globals';
 import {
+  createMqttReconnectState,
+  MQTT_MAX_RECONNECT_DELAY_MS,
   MQTT_OFFLINE_RECONNECT_DELAY_MS,
+  mqttReconnectDelayMs,
   MqttRuntimeDevice,
+  stopMqttReconnect,
   wireMqttDeviceEvents,
 } from './mqttConnection.js';
 
@@ -135,7 +139,7 @@ describe('MQTT runtime event wiring', () => {
     device.handlers.offline?.();
 
     expect(device.end).toHaveBeenCalledTimes(1);
-    expect(logger.info).toHaveBeenCalledWith('MQTT disconnected, retrying in 60 seconds!');
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('reconnecting in 60 seconds'));
     expect(scheduleReconnect).toHaveBeenCalledWith(expect.any(Function), MQTT_OFFLINE_RECONNECT_DELAY_MS);
   });
 
@@ -164,16 +168,20 @@ describe('MQTT runtime event wiring', () => {
     expect(reconnect).toHaveBeenCalledTimes(1);
   });
 
-  test('logs scheduled offline reconnect failures', async () => {
+  test('keeps retrying when a reconnect attempt fails', async () => {
+    // The device has already been ended, so no further 'offline' event will
+    // arrive. If a failed attempt did not schedule the next one, MQTT would stay
+    // dead until Homebridge restarted — the symptom after any outage longer than
+    // the first retry delay.
     const device = new FakeMqttDevice();
     const logger = fakeLogger();
     const reconnectError = new Error('still offline');
     const reconnect = jest.fn(async () => {
       throw reconnectError;
     });
-    let scheduledHandler: (() => void | Promise<void>) | undefined;
-    const scheduleReconnect = jest.fn((handler: () => void | Promise<void>) => {
-      scheduledHandler = handler;
+    const scheduled: { handler: () => void | Promise<void>; delayMs: number }[] = [];
+    const scheduleReconnect = jest.fn((handler: () => void | Promise<void>, delayMs: number) => {
+      scheduled.push({ handler, delayMs });
     });
 
     wireMqttDeviceEvents({
@@ -187,9 +195,169 @@ describe('MQTT runtime event wiring', () => {
     });
 
     device.handlers.offline?.();
-    await scheduledHandler?.();
-    await Promise.resolve();
+    await scheduled[0].handler();
 
     expect(logger.error).toHaveBeenCalledWith('mqtt reconnect failed:', reconnectError);
+    expect(scheduled).toHaveLength(2);
+
+    await scheduled[1].handler();
+    expect(reconnect).toHaveBeenCalledTimes(2);
+    expect(scheduled).toHaveLength(3);
+  });
+
+  test('backs off exponentially, capped, across repeated failures', async () => {
+    const device = new FakeMqttDevice();
+    const logger = fakeLogger();
+    const reconnect = jest.fn(async () => {
+      throw new Error('still offline');
+    });
+    const scheduled: { handler: () => void | Promise<void>; delayMs: number }[] = [];
+    const scheduleReconnect = jest.fn((handler: () => void | Promise<void>, delayMs: number) => {
+      scheduled.push({ handler, delayMs });
+    });
+
+    wireMqttDeviceEvents({
+      device,
+      logger,
+      mqttServer: 'mqtt://server',
+      subscriptions: [],
+      onMessage: jest.fn(),
+      reconnect,
+      scheduleReconnect,
+    });
+
+    device.handlers.offline?.();
+    for (let i = 0; i < 8; i++) {
+      await scheduled[i].handler();
+    }
+
+    expect(scheduled.map(entry => entry.delayMs).slice(0, 5))
+      .toEqual([60000, 120000, 240000, 480000, MQTT_MAX_RECONNECT_DELAY_MS]);
+    expect(scheduled.every(entry => entry.delayMs <= MQTT_MAX_RECONNECT_DELAY_MS)).toBe(true);
+  });
+
+  test('resets the backoff once the connection comes back', async () => {
+    const device = new FakeMqttDevice();
+    const logger = fakeLogger();
+    const state = createMqttReconnectState();
+    const scheduled: { handler: () => void | Promise<void>; delayMs: number }[] = [];
+    const scheduleReconnect = jest.fn((handler: () => void | Promise<void>, delayMs: number) => {
+      scheduled.push({ handler, delayMs });
+    });
+
+    wireMqttDeviceEvents({
+      device,
+      logger,
+      mqttServer: 'mqtt://server',
+      subscriptions: [],
+      onMessage: jest.fn(),
+      reconnect: jest.fn(async () => {
+        throw new Error('still offline');
+      }),
+      scheduleReconnect,
+      state,
+    });
+
+    device.handlers.offline?.();
+    await scheduled[0].handler();
+    expect(scheduled[1].delayMs).toBe(120000);
+
+    device.handlers.connect?.();
+    expect(state.attempt).toBe(0);
+  });
+
+  test('drops duplicate offline events instead of stacking reconnect chains', () => {
+    const device = new FakeMqttDevice();
+    const logger = fakeLogger();
+    const scheduleReconnect = jest.fn();
+
+    wireMqttDeviceEvents({
+      device,
+      logger,
+      mqttServer: 'mqtt://server',
+      subscriptions: [],
+      onMessage: jest.fn(),
+      reconnect: jest.fn(async () => undefined),
+      scheduleReconnect,
+    });
+
+    device.handlers.offline?.();
+    device.handlers.offline?.();
+    device.handlers.offline?.();
+
+    expect(scheduleReconnect).toHaveBeenCalledTimes(1);
+  });
+
+  test('a superseded connection cannot disturb the live one', () => {
+    const state = createMqttReconnectState();
+    const logger = fakeLogger();
+    const scheduleReconnect = jest.fn();
+    const oldDevice = new FakeMqttDevice();
+    const newDevice = new FakeMqttDevice();
+
+    const wire = (device: FakeMqttDevice) => wireMqttDeviceEvents({
+      device,
+      logger,
+      mqttServer: 'mqtt://server',
+      subscriptions: ['topic-a'],
+      onMessage: jest.fn(),
+      reconnect: jest.fn(async () => undefined),
+      scheduleReconnect,
+      state,
+    });
+
+    wire(oldDevice);
+    wire(newDevice);
+
+    // The stale device going offline must not schedule a reconnect, and its late
+    // 'connect' must not re-subscribe on a connection that has been replaced.
+    oldDevice.handlers.offline?.();
+    oldDevice.handlers.connect?.();
+
+    expect(scheduleReconnect).not.toHaveBeenCalled();
+    expect(oldDevice.subscribe).not.toHaveBeenCalled();
+
+    newDevice.handlers.offline?.();
+    expect(scheduleReconnect).toHaveBeenCalledTimes(1);
+  });
+
+  test('stops retrying after shutdown', async () => {
+    const device = new FakeMqttDevice();
+    const logger = fakeLogger();
+    const state = createMqttReconnectState();
+    const reconnect = jest.fn(async () => undefined);
+    const scheduled: (() => void | Promise<void>)[] = [];
+    const scheduleReconnect = jest.fn((handler: () => void | Promise<void>) => {
+      scheduled.push(handler);
+    });
+
+    wireMqttDeviceEvents({
+      device,
+      logger,
+      mqttServer: 'mqtt://server',
+      subscriptions: [],
+      onMessage: jest.fn(),
+      reconnect,
+      scheduleReconnect,
+      state,
+    });
+
+    device.handlers.offline?.();
+    stopMqttReconnect(state);
+    await scheduled[0]();
+
+    expect(reconnect).not.toHaveBeenCalled();
+
+    device.handlers.offline?.();
+    expect(scheduleReconnect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('mqttReconnectDelayMs', () => {
+  test('doubles per attempt and caps', () => {
+    expect(mqttReconnectDelayMs(0)).toBe(60000);
+    expect(mqttReconnectDelayMs(1)).toBe(120000);
+    expect(mqttReconnectDelayMs(3)).toBe(480000);
+    expect(mqttReconnectDelayMs(50)).toBe(MQTT_MAX_RECONNECT_DELAY_MS);
   });
 });

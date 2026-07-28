@@ -329,6 +329,7 @@ export class LGThinQHomebridgePlatform implements DynamicPlatformPlugin {
 
   protected stopMonitor() {
     clearMonitorIntervals(this.monitorIntervals);
+    this.ThinQ?.stopMQTTListener?.();
 
     while (this.retryTimers.length) {
       const timer = this.retryTimers.pop();
