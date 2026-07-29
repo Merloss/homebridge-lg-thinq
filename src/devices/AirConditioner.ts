@@ -1112,7 +1112,16 @@ export default class AirConditioner extends BaseDevice {
       .onGet(this.onlineGet(() => this.Status.targetTemperature))
       .onSet(this.setTargetTemperature.bind(this));
 
-    if (!this.config.ac_fan_control) {
+    if (this.config.ac_fan_control) {
+      // Fan speed lives on the separate Fanv2 service instead. An accessory
+      // restored from cache still carries RotationSpeed here, with whatever
+      // props the version that created it used, and nothing configures it now -
+      // so drop it rather than leave a second speed slider that is stale from
+      // the moment Homebridge starts.
+      if (this.service.testCharacteristic(Characteristic.RotationSpeed)) {
+        this.service.removeCharacteristic(this.service.getCharacteristic(Characteristic.RotationSpeed));
+      }
+    } else {
       this.service.getCharacteristic(Characteristic.RotationSpeed)
         .setProps(fanRotationSpeedProps())
         .onGet(this.onlineGet(() => this.Status.windStrength))
@@ -1414,7 +1423,11 @@ export default class AirConditioner extends BaseDevice {
    */
   public updateAccessoryFanStateCharacteristics() {
     const update = fanCharacteristicUpdateFromState(this.Status, this.platform.Characteristic.SwingMode);
-    this.service.updateCharacteristic(this.platform.Characteristic.RotationSpeed, update.rotationSpeed);
+    // With a separate fan service the speed belongs to it, and this service no
+    // longer carries the characteristic at all - see createHeaterCoolerService.
+    if (!this.config.ac_fan_control) {
+      this.service.updateCharacteristic(this.platform.Characteristic.RotationSpeed, update.rotationSpeed);
+    }
     if (isSwingModeEnabled(this.config.ac_swing_mode)) {
       this.service.updateCharacteristic(this.platform.Characteristic.SwingMode, update.swingMode);
     }

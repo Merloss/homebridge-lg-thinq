@@ -1,7 +1,7 @@
 import { describe, expect, jest, test } from '@jest/globals';
 import { isDeviceOnlineForHomeKit } from '../baseDevice.js';
 import type { Device } from '../lib/Device.js';
-import {
+import AirConditioner, {
   ACModelType,
   ACStatus,
   Config,
@@ -574,5 +574,64 @@ describe('AirConditioner command mapping', () => {
 
     expect(thresholdTemperatureUpdateFromState(24, 0, currentHeaterCoolerState)).toBeNull();
     expect(thresholdTemperatureUpdateFromState(24, 1, currentHeaterCoolerState)).toBeNull();
+  });
+});
+
+/**
+ * The suite below covers a method rather than the pure helpers above, so it runs
+ * against a stand-in `this` instead of a constructed accessory. The constructor
+ * wants a platform, a device model and a HAP service tree, none of which the
+ * behaviour under test reads.
+ */
+
+function fakeService() {
+  return {
+    setCharacteristic: jest.fn(),
+    addOptionalCharacteristic: jest.fn(),
+    updateCharacteristic: jest.fn(),
+  };
+}
+
+describe('updateAccessoryFanStateCharacteristics', () => {
+  function updateWith(config: Partial<Config>) {
+    const service = fakeService();
+    const stub = {
+      service,
+      config: { ...baseConfig, ...config },
+      Status: { windStrength: 50, isSwingOn: false },
+      platform: {
+        Characteristic: {
+          RotationSpeed: 'RotationSpeed',
+          SwingMode: { SWING_ENABLED: 1, SWING_DISABLED: 0 },
+        },
+      },
+    };
+
+    AirConditioner.prototype.updateAccessoryFanStateCharacteristics.call(stub as any);
+
+    return service;
+  }
+
+  test('writes the speed to the heater/cooler service when it owns the fan', () => {
+    expect(updateWith({ ac_fan_control: false }).updateCharacteristic)
+      .toHaveBeenCalledWith('RotationSpeed', 50);
+  });
+
+  test('leaves the speed alone once a separate fan service owns it', () => {
+    // The characteristic is dropped from this service during setup in that
+    // case. An accessory restored from an older cache can still arrive with one
+    // whose maximum predates the 0-100 scale, and writing to it is what
+    // produced "supplied illegal value: number 50 exceeded maximum of 5".
+    const service = updateWith({ ac_fan_control: true });
+    const speedWrites = service.updateCharacteristic.mock.calls.filter(call => call[0] === 'RotationSpeed');
+
+    expect(speedWrites).toHaveLength(0);
+  });
+
+  test('still reports swing state either way', () => {
+    const service = updateWith({ ac_fan_control: true });
+    const swingWrites = service.updateCharacteristic.mock.calls.filter(call => call[0] !== 'RotationSpeed');
+
+    expect(swingWrites).toEqual([[{ SWING_ENABLED: 1, SWING_DISABLED: 0 }, 0]]);
   });
 });
