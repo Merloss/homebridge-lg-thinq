@@ -1,0 +1,120 @@
+import { default as AirConditioner, FanSpeed } from '../../devices/AirConditioner.js';
+import { ACOperation } from '../transforms/AirState.js';
+import { normalizeBoolean, normalizeNumber } from '../helper.js';
+export default class AC extends AirConditioner {
+    createHeaterCoolerService() {
+        const { Characteristic, } = this.platform;
+        const device = this.accessory.context.device;
+        super.createHeaterCoolerService();
+        const currentTemperatureValue = device.deviceModel.value('TempCur');
+        this.service.getCharacteristic(Characteristic.CurrentTemperature)
+            .setProps({
+            minValue: currentTemperatureValue.min,
+            maxValue: currentTemperatureValue.max,
+        });
+        const targetTemperatureValue = device.deviceModel.value('TempCfg');
+        this.service.getCharacteristic(Characteristic.CoolingThresholdTemperature)
+            .setProps({
+            minValue: targetTemperatureValue.min,
+            maxValue: targetTemperatureValue.max,
+        });
+        this.service.getCharacteristic(Characteristic.HeatingThresholdTemperature)
+            .setProps({
+            minValue: targetTemperatureValue.min,
+            maxValue: targetTemperatureValue.max,
+        });
+    }
+    async setFanState(value) {
+        this.requireDeviceOnline();
+        const { TargetFanState } = this.platform.Characteristic;
+        if (!this.Status.isPowerOn) {
+            this.logger.debug('Power is off, cannot set fan state');
+            return;
+        }
+        const device = this.accessory.context.device;
+        const vNum = normalizeNumber(value);
+        const isAuto = (vNum !== null) ? (vNum === TargetFanState.AUTO) : normalizeBoolean(value);
+        const windStrength = isAuto ? 8 : FanSpeed.HIGH; // 8 mean fan auto mode
+        await this.platform.ThinQ?.thinq1DeviceControl(device, 'WindStrength', windStrength);
+        return;
+    }
+    async setJetModeActive(value) {
+        this.requireDeviceOnline();
+        const device = this.accessory.context.device;
+        const vNum = normalizeNumber(value);
+        const jetModeValue = (vNum !== null) ? vNum : (normalizeBoolean(value) ? 1 : 0);
+        if (this.Status.isPowerOn && this.Status.opMode === 0) {
+            await this.platform.ThinQ?.thinq1DeviceControl(device, 'Jet', jetModeValue);
+        }
+    }
+    async setActive(value) {
+        this.requireDeviceOnline();
+        const device = this.accessory.context.device;
+        const vNum = normalizeNumber(value);
+        const isOn = (vNum !== null) ? (vNum === 1) : normalizeBoolean(value);
+        const op = isOn ? ACOperation.RIGHT_ON : ACOperation.OFF;
+        const opValue = device.deviceModel.enumValue('Operation', op);
+        await this.platform.ThinQ?.thinq1DeviceControl(device, 'Operation', opValue);
+        return;
+    }
+    async setTargetTemperature(value) {
+        this.requireDeviceOnline();
+        if (!this.Status.isPowerOn) {
+            return;
+        }
+        const vNum = normalizeNumber(value);
+        if (vNum === null) {
+            return;
+        }
+        const device = this.accessory.context.device;
+        await this.platform.ThinQ?.thinq1DeviceControl(device, 'TempCfg', `${vNum}`);
+        device.data.snapshot['airState.tempState.target'] = vNum;
+        this.updateAccessoryCharacteristic(device);
+        return;
+    }
+    async setFanSpeed(value) {
+        this.requireDeviceOnline();
+        if (!this.Status.isPowerOn) {
+            return;
+        }
+        const vNum = normalizeNumber(value);
+        if (vNum === null) {
+            return;
+        }
+        const speedValue = Math.max(1, Math.round(vNum));
+        const device = this.accessory.context.device;
+        const windStrength = parseInt(Object.keys(FanSpeed)[speedValue - 1]) || FanSpeed.HIGH;
+        await this.platform.ThinQ?.thinq1DeviceControl(device, 'WindStrength', windStrength);
+    }
+    async setSwingMode(value) {
+        this.requireDeviceOnline();
+        if (!this.Status.isPowerOn) {
+            return;
+        }
+        const swingValue = !!value ? '100' : '0';
+        const device = this.accessory.context.device;
+        if (this.config.ac_swing_mode === 'BOTH' || this.config.ac_swing_mode === 'VERTICAL') {
+            await this.platform.ThinQ?.thinq1DeviceControl(device, 'WDirVStep', swingValue);
+            device.data.snapshot['airState.wDir.vStep'] = swingValue;
+        }
+        if (this.config.ac_swing_mode === 'BOTH' || this.config.ac_swing_mode === 'HORIZONTAL') {
+            await this.platform.ThinQ?.thinq1DeviceControl(device, 'WDirHStep', swingValue);
+            device.data.snapshot['airState.wDir.hStep'] = swingValue;
+        }
+        this.updateAccessoryCharacteristic(device);
+    }
+    async setOpMode(deviceId, opMode) {
+        this.requireDeviceOnline();
+        const device = this.accessory.context.device;
+        const result = await this.platform.ThinQ?.thinq1DeviceControl(device, 'OpMode', opMode);
+        device.data.snapshot['airState.opMode'] = opMode;
+        this.updateAccessoryCharacteristic(device);
+        return result !== null;
+    }
+    async setLight(value) {
+        this.requireDeviceOnline();
+        const device = this.accessory.context.device;
+        await this.platform.ThinQ?.thinq1DeviceControl(device, 'DisplayControl', value ? '1' : '0');
+    }
+}
+//# sourceMappingURL=AC.js.map

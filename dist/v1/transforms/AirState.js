@@ -1,0 +1,55 @@
+import { lookupEnum } from '../helper.js';
+export var ACOperation;
+(function (ACOperation) {
+    ACOperation["OFF"] = "@AC_MAIN_OPERATION_OFF_W";
+    /** This one seems to mean "on" ? */
+    ACOperation["RIGHT_ON"] = "@AC_MAIN_OPERATION_RIGHT_ON_W";
+    ACOperation["LEFT_ON"] = "@AC_MAIN_OPERATION_LEFT_ON_W";
+    ACOperation["ALL_ON"] = "@AC_MAIN_OPERATION_ALL_ON_W";
+})(ACOperation || (ACOperation = {}));
+export default function AirState(deviceModel, decodedMonitor) {
+    const airState = {
+        'airState.opMode': parseInt(decodedMonitor.OpMode || '0'),
+        'airState.operation': lookupEnum(deviceModel, decodedMonitor, 'Operation') !== ACOperation.OFF,
+        'airState.tempState.current': parseFloat(decodedMonitor.TempCur || '0'),
+        'airState.tempState.target': parseFloat(decodedMonitor.TempCfg || '0'),
+        'airState.windStrength': parseInt(decodedMonitor.WindStrength || '0'),
+        'airState.wDir.vStep': parseInt(decodedMonitor.WDirVStep || '0'),
+        'airState.wDir.hStep': parseInt(decodedMonitor.WDirHStep || '0'),
+        'airState.circulate.rotate': parseInt(decodedMonitor.CirculateDir),
+        'airState.lightingState.signal': parseInt(decodedMonitor.SignalLighting),
+        'airState.quality.overall': 0,
+        'airState.quality.sensorMon': 0,
+        'airState.quality.PM1': 0,
+        'airState.energy.onCurrent': 0,
+    };
+    if (deviceModel.value('TempCur')) {
+        airState['airState.tempState.current'] = Math.max(airState['airState.tempState.current'], deviceModel.value('TempCur').min);
+    }
+    if (deviceModel.value('TempCfg')) {
+        airState['airState.tempState.target'] = Math.max(airState['airState.tempState.target'], deviceModel.value('TempCfg').min);
+    }
+    if (decodedMonitor.TotalAirPolution) {
+        airState['airState.quality.overall'] = parseInt(decodedMonitor.TotalAirPolution);
+    }
+    if (decodedMonitor.SensorMon) {
+        airState['airState.quality.sensorMon'] = parseInt(decodedMonitor.SensorMon);
+    }
+    if (decodedMonitor.SensorPM1) {
+        airState['airState.quality.PM1'] = parseInt(decodedMonitor.SensorPM1);
+    }
+    if (decodedMonitor.SensorPM2) {
+        airState['airState.quality.PM2'] = parseInt(decodedMonitor.SensorPM2);
+    }
+    if (decodedMonitor.SensorPM10) {
+        airState['airState.quality.PM10'] = parseInt(decodedMonitor.SensorPM10);
+    }
+    if (decodedMonitor.Jet) {
+        airState['airState.wMode.jet'] = parseInt(decodedMonitor.Jet);
+    }
+    if (decodedMonitor.SensorHumidity) {
+        airState['airState.humidity.current'] = parseInt(decodedMonitor.SensorHumidity);
+    }
+    return airState;
+}
+//# sourceMappingURL=AirState.js.map

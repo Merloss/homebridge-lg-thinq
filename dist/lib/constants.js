@@ -1,0 +1,53 @@
+export const GATEWAY_URL = 'https://route.lgthinq.com:46030/v1/service/application/gateway-uri';
+export const SVC_CODE = 'SVC202';
+export const CLIENT_ID = 'LGAO221A02';
+export const OAUTH_SECRET_KEY = 'c053c2a6ddeb7ad97cb0eed0dcb31cf8';
+export const OAUTH_CLIENT_KEY = 'LGAO722A02';
+export const API_KEY = 'VGhpblEyLjAgU0VSVklDRQ==';
+export const API_CLIENT_ID = 'c713ea8e50f657534ff8b9d373dfebfc2ed70b88285c26b8ade49868c0b164d9';
+export const APPLICATION_KEY = '6V1V8H2BN5P9ZQGOI5DAQ92YZBDO3EK9'; // for spx login
+export var PlatformType;
+(function (PlatformType) {
+    PlatformType["ThinQ1"] = "thinq1";
+    PlatformType["ThinQ2"] = "thinq2";
+})(PlatformType || (PlatformType = {}));
+export var DeviceType;
+(function (DeviceType) {
+    DeviceType[DeviceType["REFRIGERATOR"] = 101] = "REFRIGERATOR";
+    DeviceType[DeviceType["KIMCHI_REFRIGERATOR"] = 102] = "KIMCHI_REFRIGERATOR";
+    DeviceType[DeviceType["WATER_PURIFIER"] = 103] = "WATER_PURIFIER";
+    DeviceType[DeviceType["WASHER"] = 201] = "WASHER";
+    DeviceType[DeviceType["WASHER_NEW"] = 221] = "WASHER_NEW";
+    DeviceType[DeviceType["WASH_TOWER"] = 222] = "WASH_TOWER";
+    DeviceType[DeviceType["WASH_TOWER_2"] = 223] = "WASH_TOWER_2";
+    DeviceType[DeviceType["DRYER"] = 202] = "DRYER";
+    DeviceType[DeviceType["STYLER"] = 203] = "STYLER";
+    DeviceType[DeviceType["DISHWASHER"] = 204] = "DISHWASHER";
+    DeviceType[DeviceType["OVEN"] = 301] = "OVEN";
+    DeviceType[DeviceType["MICROWAVE"] = 302] = "MICROWAVE";
+    DeviceType[DeviceType["COOKTOP"] = 303] = "COOKTOP";
+    DeviceType[DeviceType["HOOD"] = 304] = "HOOD";
+    DeviceType[DeviceType["AC"] = 401] = "AC";
+    DeviceType[DeviceType["AIR_PURIFIER"] = 402] = "AIR_PURIFIER";
+    DeviceType[DeviceType["DEHUMIDIFIER"] = 403] = "DEHUMIDIFIER";
+    DeviceType[DeviceType["ROBOT_KING"] = 501] = "ROBOT_KING";
+    DeviceType[DeviceType["TV"] = 701] = "TV";
+    DeviceType[DeviceType["BOILER"] = 801] = "BOILER";
+    DeviceType[DeviceType["SPEAKER"] = 901] = "SPEAKER";
+    DeviceType[DeviceType["HOMEVU"] = 902] = "HOMEVU";
+    DeviceType[DeviceType["ARCH"] = 1001] = "ARCH";
+    DeviceType[DeviceType["MISSG"] = 3001] = "MISSG";
+    DeviceType[DeviceType["SENSOR"] = 3002] = "SENSOR";
+    DeviceType[DeviceType["SOLAR_SENSOR"] = 3102] = "SOLAR_SENSOR";
+    DeviceType[DeviceType["IOT_LIGHTING"] = 3003] = "IOT_LIGHTING";
+    DeviceType[DeviceType["IOT_MOTION_SENSOR"] = 3004] = "IOT_MOTION_SENSOR";
+    DeviceType[DeviceType["IOT_SMART_PLUG"] = 3005] = "IOT_SMART_PLUG";
+    DeviceType[DeviceType["IOT_DUST_SENSOR"] = 3006] = "IOT_DUST_SENSOR";
+    DeviceType[DeviceType["EMS_AIR_STATION"] = 4001] = "EMS_AIR_STATION";
+    DeviceType[DeviceType["AIR_SENSOR"] = 4003] = "AIR_SENSOR";
+    DeviceType[DeviceType["PURICARE_AIR_DETECTOR"] = 4004] = "PURICARE_AIR_DETECTOR";
+    DeviceType[DeviceType["V2PHONE"] = 6001] = "V2PHONE";
+    DeviceType[DeviceType["HOMEROBOT"] = 9000] = "HOMEROBOT";
+    DeviceType[DeviceType["AERO_TOWER"] = 410] = "AERO_TOWER";
+})(DeviceType || (DeviceType = {}));
+//# sourceMappingURL=constants.js.map

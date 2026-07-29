@@ -1,5 +1,6 @@
-# Ignore compiled code
-dist
+# Compiled code is tracked on this branch on purpose - see README-INSTALL.md.
+# Do not add `dist` back here without also deleting it from the tree, or the
+# branch stops serving the one job it exists for.
 
 # ------------- Defaults ------------- #
 .DS_Store
@@ -87,7 +88,6 @@ web_modules/
 
 # Nuxt.js build / generate output
 .nuxt
-dist
 
 # Gatsby files
 .cache/

@@ -1,0 +1,62 @@
+import AirPurifier from './devices/AirPurifier.js';
+import Refrigerator from './devices/Refrigerator.js';
+import WasherDryer from './devices/WasherDryer.js';
+import Dishwasher from './devices/Dishwasher.js';
+import Dehumidifier from './devices/Dehumidifier.js';
+import { default as V1helper } from './v1/helper.js';
+import { PlatformType } from './lib/constants.js';
+import AirConditioner from './devices/AirConditioner.js';
+import AeroTower from './devices/AeroTower.js';
+import Styler from './devices/Styler.js';
+import RangeHood from './devices/RangeHood.js';
+import Oven from './devices/Oven.js';
+import Microwave from './devices/Microwave.js';
+import WasherDryer2 from './devices/WasherDryer2.js';
+import { fToC, cToF } from './utils/temperature.js';
+/**
+ * Platform Accessory
+ * An instance of this class is created for each accessory your platform registers
+ * Each accessory may expose multiple services of different service types.
+ */
+export class Helper {
+    static make(device) {
+        if (device.platform === PlatformType.ThinQ1) {
+            // check if thinq1 available
+            return V1helper.make(device);
+        }
+        // thinq2
+        switch (device.type) {
+            case 'AERO_TOWER': return AeroTower;
+            case 'AIR_PURIFIER': return AirPurifier;
+            case 'REFRIGERATOR': return Refrigerator;
+            case 'WASHER':
+            case 'WASHER_NEW':
+            case 'WASH_TOWER':
+            case 'DRYER':
+                return WasherDryer;
+            case 'WASH_TOWER_2': return WasherDryer2; // new kind of washer
+            case 'DISHWASHER': return Dishwasher;
+            case 'DEHUMIDIFIER': return Dehumidifier;
+            case 'AC': return AirConditioner;
+            case 'STYLER': return Styler;
+            case 'HOOD': return RangeHood;
+            case 'MICROWAVE': return Microwave;
+            case 'OVEN': return Oven;
+        }
+        return null;
+    }
+    static category(device) {
+        switch (device.type) {
+            case 'AIR_PURIFIER': return 19 /* Categories.AIR_PURIFIER */;
+            case 'DEHUMIDIFIER': return 23 /* Categories.AIR_DEHUMIDIFIER */;
+            case 'AC': return 21 /* Categories.AIR_CONDITIONER */;
+            case 'DISHWASHER': return 1 /*Sprinkler*/;
+            case 'OVEN': return 9 /*Thermostat*/;
+            case 'MICROWAVE': return 9 /*air heater*/;
+            default: return 1 /* Categories.OTHER */;
+        }
+    }
+}
+export { fToC, cToF };
+export { normalizeBoolean, normalizeNumber } from './utils/normalize.js';
+//# sourceMappingURL=helper.js.map

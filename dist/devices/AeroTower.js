@@ -1,0 +1,108 @@
+import AirPurifier from './AirPurifier.js';
+import { hasSnapshotKey, snapshotBoolean, snapshotNumber, updateCharacteristicIfChanged, } from './helpers.js';
+export var LightBrightness;
+(function (LightBrightness) {
+    LightBrightness[LightBrightness["OFF"] = 0] = "OFF";
+    LightBrightness[LightBrightness["ON"] = 1] = "ON";
+    LightBrightness[LightBrightness["LEVEL_1"] = 8] = "LEVEL_1";
+    LightBrightness[LightBrightness["LEVEL_2"] = 9] = "LEVEL_2";
+    LightBrightness[LightBrightness["LEVEL_3"] = 10] = "LEVEL_3";
+})(LightBrightness || (LightBrightness = {}));
+export default class AeroTower extends AirPurifier {
+    platform;
+    accessory;
+    serviceTemperatureSensor;
+    serviceHumiditySensor;
+    serviceUVNano;
+    constructor(platform, accessory, logger) {
+        super(platform, accessory, logger);
+        this.platform = platform;
+        this.accessory = accessory;
+        const { Service: { TemperatureSensor, HumiditySensor, Switch, }, Characteristic, } = this.platform;
+        this.serviceTemperatureSensor = accessory.getService(TemperatureSensor)
+            || accessory.addService(TemperatureSensor, 'Temperature Sensor');
+        this.serviceHumiditySensor = accessory.getService(HumiditySensor)
+            || accessory.addService(HumiditySensor, 'Humidity Sensor');
+        if (this.serviceLight) {
+            this.serviceLight.getCharacteristic(Characteristic.Brightness)
+                .setProps({
+                maxValue: 3, // 3 level of light
+            })
+                .onGet(this.onlineGet(() => {
+                const values = [LightBrightness.LEVEL_1, LightBrightness.LEVEL_2, LightBrightness.LEVEL_3];
+                const brightnessValue = values.indexOf(snapshotNumber(this.accessory.context.device.snapshot, 'airState.lightingState.displayControl'));
+                return brightnessValue === -1 ? 0 : brightnessValue + 1;
+            }))
+                .onSet(this.setLightBrightness.bind(this));
+        }
+        this.serviceTemperatureSensor.getCharacteristic(Characteristic.CurrentTemperature)
+            .onGet(this.onlineGet(() => snapshotNumber(this.accessory.context.device.snapshot, 'airState.tempState.current')));
+        this.serviceTemperatureSensor.getCharacteristic(Characteristic.StatusActive)
+            .onGet(this.onlineGet(() => this.Status.isPowerOn));
+        this.serviceHumiditySensor.getCharacteristic(Characteristic.CurrentRelativeHumidity)
+            .onGet(this.onlineGet(() => snapshotNumber(this.accessory.context.device.snapshot, 'airState.humidity.current')));
+        this.serviceHumiditySensor.getCharacteristic(Characteristic.StatusActive)
+            .onGet(this.onlineGet(() => this.Status.isPowerOn));
+        this.serviceUVNano = accessory.getService(Switch) || accessory.addService(Switch, 'UV Purifier');
+        this.serviceUVNano.getCharacteristic(Characteristic.On)
+            .onGet(this.onlineGet(() => snapshotBoolean(this.accessory.context.device.snapshot, 'airState.miscFuncState.Uvnano')))
+            .onSet(this.setUVMode.bind(this));
+    }
+    async setLight(value) {
+        this.requireDeviceOnline();
+        if (!this.Status.isPowerOn) {
+            return;
+        }
+        const device = this.accessory.context.device;
+        const isLightOn = value ? 1 : 0;
+        await this.platform.ThinQ?.deviceControl(device.id, {
+            dataKey: 'airState.lightingState.displayControl',
+            dataValue: isLightOn,
+        });
+        device.data.snapshot['airState.lightingState.displayControl'] = isLightOn;
+        this.updateAccessoryCharacteristic(device);
+    }
+    async setUVMode(value) {
+        this.requireDeviceOnline();
+        const uvModeValue = value ? 1 : 0;
+        await this.platform.ThinQ?.deviceControl(this.accessory.context.device, {
+            dataKey: 'airState.miscFuncState.Uvnano',
+            dataValue: uvModeValue,
+        });
+        this.accessory.context.device.data.snapshot['airState.miscFuncState.Uvnano'] = uvModeValue;
+        this.updateAccessoryCharacteristic(this.accessory.context.device);
+    }
+    async setLightBrightness(value) {
+        this.requireDeviceOnline();
+        const brightnessValue = value - 1;
+        const values = [LightBrightness.LEVEL_1, LightBrightness.LEVEL_2, LightBrightness.LEVEL_3];
+        if (typeof values[brightnessValue] !== 'undefined') {
+            await this.platform.ThinQ?.deviceControl(this.accessory.context.device, {
+                dataKey: 'airState.lightingState.displayControl',
+                dataValue: values[brightnessValue],
+            });
+            this.accessory.context.device.data.snapshot['airState.lightingState.displayControl'] = values[brightnessValue];
+            this.updateAccessoryCharacteristic(this.accessory.context.device);
+        }
+    }
+    updateAccessoryCharacteristic(device) {
+        super.updateAccessoryCharacteristic(device);
+        const { Characteristic, } = this.platform;
+        const snapshot = device.data.snapshot ?? {};
+        // light brightness
+        const values = [LightBrightness.LEVEL_1, LightBrightness.LEVEL_2, LightBrightness.LEVEL_3];
+        const brightnessValue = values.indexOf(snapshotNumber(snapshot, 'airState.lightingState.displayControl'));
+        if (brightnessValue !== -1) {
+            updateCharacteristicIfChanged(this.serviceLight, Characteristic.Brightness, brightnessValue + 1);
+        }
+        if (hasSnapshotKey(snapshot, 'airState.tempState.current')) {
+            updateCharacteristicIfChanged(this.serviceTemperatureSensor, Characteristic.CurrentTemperature, snapshotNumber(snapshot, 'airState.tempState.current'));
+        }
+        if (hasSnapshotKey(snapshot, 'airState.humidity.current')) {
+            updateCharacteristicIfChanged(this.serviceHumiditySensor, Characteristic.CurrentRelativeHumidity, snapshotNumber(snapshot, 'airState.humidity.current'));
+        }
+        // uv mode
+        updateCharacteristicIfChanged(this.serviceUVNano, Characteristic.On, snapshotBoolean(snapshot, 'airState.miscFuncState.Uvnano'));
+    }
+}
+//# sourceMappingURL=AeroTower.js.map
