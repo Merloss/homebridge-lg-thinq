@@ -1325,17 +1325,33 @@ export default class AirConditioner extends BaseDevice {
         return this.jetModeModels.includes(model); // cool mode only
     }
     setupButton(device) {
-        if (!this.config.ac_buttons.length) {
+        const buttons = this.config.ac_buttons;
+        const configured = new Set(buttons.map(button => button.name));
+        const label = this.accessory.getService('Buttons');
+        if (label) {
+            // Iterate a copy: removeService unlinks the service from this very array
+            // as it goes, so walking the live one by index skips every second entry
+            // and leaves half the removed buttons in HomeKit.
+            for (const button of [...label.linkedServices]) {
+                if (!configured.has(button.displayName)) {
+                    this.accessory.removeService(button);
+                }
+            }
+        }
+        if (!buttons.length) {
+            // Emptying the list has to take the switches with it. Returning before
+            // the cleanup left every button that was ever configured in place, with
+            // no way to get rid of it short of deleting the cached accessory.
+            if (label) {
+                this.accessory.removeService(label);
+            }
+            this.serviceLabelButtons = undefined;
             return;
         }
-        this.serviceLabelButtons = this.accessory.getService('Buttons')
+        this.serviceLabelButtons = label
             || this.accessory.addService(this.platform.Service.ServiceLabel, 'Buttons', 'Buttons');
-        // remove all buttons before
-        for (let i = 0; i < this.serviceLabelButtons.linkedServices.length; i++) {
-            this.accessory.removeService(this.serviceLabelButtons.linkedServices[i]);
-        }
-        for (let i = 0; i < this.config.ac_buttons.length; i++) {
-            this.setupButtonOpmode(device, this.config.ac_buttons[i].name, parseInt(this.config.ac_buttons[i].op_mode));
+        for (const button of buttons) {
+            this.setupButtonOpmode(device, button.name, parseInt(button.op_mode));
         }
     }
     setupButtonOpmode(device, name, opMode) {
