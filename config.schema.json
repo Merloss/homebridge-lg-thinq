@@ -319,6 +319,7 @@
                 "devices[].ac_swing_mode",
                 "devices[].ac_temperature_sensor",
                 "devices[].ac_humidity_sensor",
+                "devices[].ac_led_control",
                 "devices[].ac_fan_control",
                 "devices[].ac_jet_control",
                 "devices[].ac_energy_save",
