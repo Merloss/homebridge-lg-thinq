@@ -1,7 +1,7 @@
 import { describe, expect, jest, test } from '@jest/globals';
 import { isDeviceOnlineForHomeKit } from '../baseDevice.js';
 import type { Device } from '../lib/Device.js';
-import {
+import AirConditioner, {
   ACModelType,
   ACStatus,
   Config,
@@ -574,5 +574,101 @@ describe('AirConditioner command mapping', () => {
 
     expect(thresholdTemperatureUpdateFromState(24, 0, currentHeaterCoolerState)).toBeNull();
     expect(thresholdTemperatureUpdateFromState(24, 1, currentHeaterCoolerState)).toBeNull();
+  });
+});
+
+/**
+ * The two suites below cover methods rather than the pure helpers above, so
+ * they run against a stand-in `this` instead of a constructed accessory. The
+ * constructor wants a platform, a device model and a HAP service tree, none of
+ * which the behaviour under test reads.
+ */
+
+// Reached through the prototype because it is protected, and because a stand-in
+// `this` is a plain object rather than an instance - a subclass wrapper would
+// look up the method on that object and not find it.
+const nameSubService = (AirConditioner.prototype as any).nameSubService as
+  (this: unknown, service: unknown, label: string) => void;
+
+function fakeService() {
+  return {
+    setCharacteristic: jest.fn(),
+    addOptionalCharacteristic: jest.fn(),
+    updateCharacteristic: jest.fn(),
+  };
+}
+
+describe('sub-service naming', () => {
+  test('names a sub-service after the feature and nothing else', () => {
+    const service = fakeService();
+    const stub = {
+      platform: {
+        Characteristic: {
+          Name: 'Name',
+          ConfiguredName: 'ConfiguredName',
+        },
+      },
+      accessory: {
+        context: {
+          device: { name: 'Air Conditioner' },
+        },
+      },
+    };
+
+    nameSubService.call(stub, service, 'Jet Mode');
+
+    expect(service.setCharacteristic).toHaveBeenCalledWith('Name', 'Jet Mode');
+    expect(service.setCharacteristic).toHaveBeenCalledWith('ConfiguredName', 'Jet Mode');
+
+    // The accessory name is what every sub-service would have in common, and
+    // Home truncates a tile label from the end - so prefixing with it hides the
+    // one word that tells the tiles apart.
+    for (const call of service.setCharacteristic.mock.calls) {
+      expect(String(call[1])).not.toContain('Air Conditioner');
+    }
+  });
+});
+
+describe('updateAccessoryFanStateCharacteristics', () => {
+  function updateWith(config: Partial<Config>) {
+    const service = fakeService();
+    const stub = {
+      service,
+      config: { ...baseConfig, ...config },
+      Status: { windStrength: 50, isSwingOn: false },
+      platform: {
+        Characteristic: {
+          RotationSpeed: 'RotationSpeed',
+          SwingMode: { SWING_ENABLED: 1, SWING_DISABLED: 0 },
+        },
+      },
+    };
+
+    AirConditioner.prototype.updateAccessoryFanStateCharacteristics.call(stub as any);
+
+    return service;
+  }
+
+  test('writes the speed to the heater/cooler service when it owns the fan', () => {
+    expect(updateWith({ ac_fan_control: false }).updateCharacteristic)
+      .toHaveBeenCalledWith('RotationSpeed', 50);
+  });
+
+  test('leaves the speed alone once a separate fan service owns it', () => {
+    // The characteristic is dropped from this service during setup in that
+    // case. An accessory restored from an older cache can still arrive with one
+    // whose maximum predates the 0-100 scale, and writing to it is what
+    // produced "supplied illegal value: number 50 exceeded maximum of 5".
+    const service = updateWith({ ac_fan_control: true });
+    const speedWrites = service.updateCharacteristic.mock.calls.filter(call => call[0] === 'RotationSpeed');
+
+    expect(speedWrites).toHaveLength(0);
+  });
+
+  test('still reports swing state either way', () => {
+    const service = updateWith({ ac_fan_control: true });
+    const swingWrites = service.updateCharacteristic.mock.calls.filter(call => call[0] !== 'RotationSpeed');
+
+    expect(swingWrites).toEqual([[{ SWING_ENABLED: 1, SWING_DISABLED: 0 }, 0]]);
   });
 });
