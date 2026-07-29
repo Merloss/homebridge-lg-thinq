@@ -898,8 +898,7 @@ export default class AirConditioner extends BaseDevice {
     this.serviceJetMode = accessory.getService('Jet Mode');
     if (this.config.ac_jet_control as boolean && this.isJetModeEnabled(device.model)) {
       this.serviceJetMode = this.serviceJetMode || accessory.addService(Switch, 'Jet Mode', 'Jet Mode');
-      this.serviceJetMode.addOptionalCharacteristic(Characteristic.ConfiguredName);
-      this.serviceJetMode.setCharacteristic(Characteristic.ConfiguredName, device.name + ' Jet Mode');
+      this.nameSubService(this.serviceJetMode, 'Jet Mode');
       this.serviceJetMode.getCharacteristic(Characteristic.On)
         .onSet(this.setJetModeActive.bind(this));
     } else if (this.serviceJetMode) {
@@ -939,8 +938,7 @@ export default class AirConditioner extends BaseDevice {
     this.serviceEnergySaveMode = accessory.getService('Energy save');
     if (this.energySaveModeModels.includes(device.model) && this.config.ac_energy_save as boolean) {
       this.serviceEnergySaveMode = this.serviceEnergySaveMode || accessory.addService(Switch, 'Energy save', 'Energy save');
-      this.serviceEnergySaveMode.addOptionalCharacteristic(Characteristic.ConfiguredName);
-      this.serviceEnergySaveMode.setCharacteristic(Characteristic.ConfiguredName, device.name + ' Energy save');
+      this.nameSubService(this.serviceEnergySaveMode, 'Energy Save');
       this.serviceEnergySaveMode.getCharacteristic(Characteristic.On)
         .onSet(this.setEnergySaveActive.bind(this));
     } else if (this.serviceEnergySaveMode) {
@@ -960,8 +958,7 @@ export default class AirConditioner extends BaseDevice {
     this.serviceAirClean = accessory.getService('Air Purify');
     if (this.airCleanModels.includes(device.model) && this.config.ac_air_clean as boolean) {
       this.serviceAirClean = this.serviceAirClean || accessory.addService(Switch, 'Air Purify', 'Air Purify');
-      this.serviceAirClean.addOptionalCharacteristic(Characteristic.ConfiguredName);
-      this.serviceAirClean.setCharacteristic(Characteristic.ConfiguredName, device.name + ' Air Purify');
+      this.nameSubService(this.serviceAirClean, 'Air Purify');
       this.serviceAirClean.getCharacteristic(Characteristic.On)
         .onSet(this.setAirCleanActive.bind(this));
     } else if (this.serviceAirClean) {
@@ -982,6 +979,7 @@ export default class AirConditioner extends BaseDevice {
 
     // fan controller
     this.serviceFanV2 = this.accessory.getService(Fanv2) || this.accessory.addService(Fanv2);
+    this.nameSubService(this.serviceFanV2, 'Fan');
     this.serviceFanV2.addLinkedService(this.service);
 
     this.serviceFanV2.getCharacteristic(Characteristic.Active)
@@ -1029,20 +1027,24 @@ export default class AirConditioner extends BaseDevice {
   }
 
   /**
-   * Gives a sub-service a stable, device-prefixed name.
+   * Names a sub-service after what it does, and nothing else.
    *
    * Without both `Name` and `ConfiguredName`, the Home app falls back to a
    * generic label ("Sensor", "Light", "Switch"), which is indistinguishable once
    * an accessory exposes several of them.
+   *
+   * The device name is deliberately left out. Home gives a tile about fifteen
+   * characters and truncates the rest, so prefixing every sub-service with it
+   * produces a row of tiles that all read "Air Conditioner..." - the accessory
+   * name is the part they share, and the label is the part that got cut. Home
+   * already groups the tiles under the accessory, so the prefix buys nothing.
    */
   protected nameSubService(service: Service, label: string) {
-    const device: Device = this.accessory.context.device;
     const { Characteristic } = this.platform;
-    const name = device.name + ' ' + label;
 
-    service.setCharacteristic(Characteristic.Name, name);
+    service.setCharacteristic(Characteristic.Name, label);
     service.addOptionalCharacteristic(Characteristic.ConfiguredName);
-    service.setCharacteristic(Characteristic.ConfiguredName, name);
+    service.setCharacteristic(Characteristic.ConfiguredName, label);
   }
 
   protected createHeaterCoolerService() {

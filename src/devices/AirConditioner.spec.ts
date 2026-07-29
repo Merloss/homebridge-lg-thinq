@@ -578,11 +578,17 @@ describe('AirConditioner command mapping', () => {
 });
 
 /**
- * The suite below covers a method rather than the pure helpers above, so it runs
- * against a stand-in `this` instead of a constructed accessory. The constructor
- * wants a platform, a device model and a HAP service tree, none of which the
- * behaviour under test reads.
+ * The two suites below cover methods rather than the pure helpers above, so
+ * they run against a stand-in `this` instead of a constructed accessory. The
+ * constructor wants a platform, a device model and a HAP service tree, none of
+ * which the behaviour under test reads.
  */
+
+// Reached through the prototype because it is protected, and because a stand-in
+// `this` is a plain object rather than an instance - a subclass wrapper would
+// look up the method on that object and not find it.
+const nameSubService = (AirConditioner.prototype as any).nameSubService as
+  (this: unknown, service: unknown, label: string) => void;
 
 function fakeService() {
   return {
@@ -591,6 +597,37 @@ function fakeService() {
     updateCharacteristic: jest.fn(),
   };
 }
+
+describe('sub-service naming', () => {
+  test('names a sub-service after the feature and nothing else', () => {
+    const service = fakeService();
+    const stub = {
+      platform: {
+        Characteristic: {
+          Name: 'Name',
+          ConfiguredName: 'ConfiguredName',
+        },
+      },
+      accessory: {
+        context: {
+          device: { name: 'Air Conditioner' },
+        },
+      },
+    };
+
+    nameSubService.call(stub, service, 'Jet Mode');
+
+    expect(service.setCharacteristic).toHaveBeenCalledWith('Name', 'Jet Mode');
+    expect(service.setCharacteristic).toHaveBeenCalledWith('ConfiguredName', 'Jet Mode');
+
+    // The accessory name is what every sub-service would have in common, and
+    // Home truncates a tile label from the end - so prefixing with it hides the
+    // one word that tells the tiles apart.
+    for (const call of service.setCharacteristic.mock.calls) {
+      expect(String(call[1])).not.toContain('Air Conditioner');
+    }
+  });
+});
 
 describe('updateAccessoryFanStateCharacteristics', () => {
   function updateWith(config: Partial<Config>) {
