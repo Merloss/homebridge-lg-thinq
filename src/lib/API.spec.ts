@@ -71,25 +71,25 @@ describe('API', () => {
     await expect(api.getRequest('service/homes')).rejects.toThrow(NotConnectedError);
   });
 
-  test('skips a home it cannot read instead of crashing the discovery round', async () => {
-    // request() returns {} for handled failures; reading .result.devices off
-    // that used to throw a TypeError that killed the whole poll cycle.
+  test('fails the round rather than reporting a home it cannot read as empty', async () => {
+    // request() returns {} for handled failures. Returning the devices it did
+    // manage to read would tell discovery the other home's appliances are gone,
+    // and discovery deletes accessories it no longer sees.
     jest.spyOn(api, 'getListHomes').mockResolvedValueOnce([{ homeId: 'broken' }, { homeId: 'good' }]);
     jest.spyOn(api.httpClient, 'request')
       .mockResolvedValueOnce({ data: {} })
       .mockResolvedValueOnce({ data: { result: { devices: [{ id: 'device1' }] } } });
 
-    await expect(api.getListDevices()).resolves.toEqual([{ id: 'device1' }]);
-    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('broken'));
+    await expect(api.getListDevices()).rejects.toThrow(NotConnectedError);
   });
 
-  test('does not cache a failed home lookup', async () => {
+  test('reports an unreadable home list as a failure, and does not cache it', async () => {
     const request = jest.spyOn(api.httpClient, 'request')
       .mockResolvedValueOnce({ data: {} })
       .mockResolvedValueOnce({ data: { result: { item: [{ homeId: 'home1' }] } } });
     api['_gateway'] = { thinq1_url: '', thinq2_url: 'https://example.com/' } as any;
 
-    await expect(api.getListHomes()).resolves.toEqual([]);
+    await expect(api.getListHomes()).rejects.toThrow(NotConnectedError);
     // A transient failure must not leave the account permanently "home-less".
     await expect(api.getListHomes()).resolves.toEqual([{ homeId: 'home1' }]);
     expect(request).toHaveBeenCalledTimes(2);
