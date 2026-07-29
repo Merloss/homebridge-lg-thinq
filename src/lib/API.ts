@@ -247,9 +247,14 @@ export class API {
 
       // `request()` returns {} for handled failures, so a missing device list
       // here means "this home could not be read", not "this home is empty".
+      //
+      // Failing the whole round is the safe reading. Callers treat what they get
+      // back as the complete account, and discovery unregisters every accessory
+      // missing from it - so returning a partial list quietly deletes the user's
+      // appliances from HomeKit, along with their rooms and any automation that
+      // referenced them, over what may have been one timed-out request.
       if (!Array.isArray(homeDevices)) {
-        this.logger.warn('Could not read the device list for home ' + home.homeId + ', skipping it this round.');
-        continue;
+        throw new NotConnectedError('Could not read the device list for home ' + home.homeId + '.');
       }
 
       devices.push(...homeDevices);
@@ -271,10 +276,12 @@ export class API {
     const item = await this.getRequest('service/homes').then(data => data?.result?.item);
 
     if (!Array.isArray(item)) {
-      // Do not cache a failed lookup, otherwise one transient error would leave
-      // the plugin permanently convinced the account has no homes.
-      this.logger.warn('LG ThinQ returned no home list. Will retry on the next refresh.');
-      return [];
+      // Nothing is cached here, so one transient error cannot leave the plugin
+      // permanently convinced the account has no homes. It is reported as a
+      // failure rather than an empty account for the same reason getListDevices
+      // does: an empty list reads downstream as "every appliance was deleted",
+      // and discovery acts on that by unregistering all of them.
+      throw new NotConnectedError('LG ThinQ returned no home list.');
     }
 
     this._homes = item;
