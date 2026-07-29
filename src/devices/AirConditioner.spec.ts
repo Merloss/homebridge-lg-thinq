@@ -672,3 +672,57 @@ describe('updateAccessoryFanStateCharacteristics', () => {
     expect(swingWrites).toEqual([[{ SWING_ENABLED: 1, SWING_DISABLED: 0 }, 0]]);
   });
 });
+
+const setupButton = (AirConditioner.prototype as any).setupButton as (this: unknown, device: unknown) => void;
+
+describe('setupButton', () => {
+  function run(configuredNames: string[], existingNames: string[]) {
+    const label = { linkedServices: existingNames.map(name => ({ displayName: name })) };
+    const removed: string[] = [];
+    const stub = {
+      config: {
+        ...baseConfig,
+        ac_buttons: configuredNames.map(name => ({ name, op_mode: '0' })),
+      },
+      platform: { Service: { ServiceLabel: 'ServiceLabel' } },
+      setupButtonOpmode: jest.fn(),
+      accessory: {
+        getService: (name: string) => (name === 'Buttons' ? label : undefined),
+        addService: jest.fn(),
+        // Mirrors hap-nodejs: removing a service also unlinks it, which mutates
+        // the very array setupButton is walking.
+        removeService: (service: { displayName?: string }) => {
+          removed.push(service.displayName ?? 'Buttons');
+          const index = label.linkedServices.findIndex(linked => linked === service);
+          if (index >= 0) {
+            label.linkedServices.splice(index, 1);
+          }
+        },
+      },
+      serviceLabelButtons: undefined as unknown,
+    };
+
+    setupButton.call(stub, {});
+
+    return { removed, stub, label };
+  }
+
+  test('removes every button that is no longer configured', () => {
+    // Two in a row is the case that matters: walking the live array by index
+    // skipped the second one, so half the stale buttons stayed in HomeKit.
+    const { removed, stub } = run(['Keep'], ['Gone one', 'Gone two', 'Keep']);
+
+    expect(removed).toEqual(['Gone one', 'Gone two']);
+    expect(stub.setupButtonOpmode).toHaveBeenCalledTimes(1);
+  });
+
+  test('takes the switches with it when the list is emptied', () => {
+    // Returning early on an empty list left every button ever configured in
+    // place, with no way to remove one short of deleting the cached accessory.
+    const { removed, stub } = run([], ['One', 'Two']);
+
+    expect(removed).toEqual(['One', 'Two', 'Buttons']);
+    expect(stub.serviceLabelButtons).toBeUndefined();
+    expect(stub.setupButtonOpmode).not.toHaveBeenCalled();
+  });
+});
