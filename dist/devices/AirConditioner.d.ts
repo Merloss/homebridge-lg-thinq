@@ -206,11 +206,17 @@ export default class AirConditioner extends BaseDevice {
     protected createFanService(): void;
     protected createAirQualityService(): void;
     /**
-     * Gives a sub-service a stable, device-prefixed name.
+     * Names a sub-service after what it does, and nothing else.
      *
      * Without both `Name` and `ConfiguredName`, the Home app falls back to a
      * generic label ("Sensor", "Light", "Switch"), which is indistinguishable once
      * an accessory exposes several of them.
+     *
+     * The device name is deliberately left out. Home gives a tile about fifteen
+     * characters and truncates the rest, so prefixing every sub-service with it
+     * produces a row of tiles that all read "Air Conditioner..." - the accessory
+     * name is the part they share, and the label is the part that got cut. Home
+     * already groups the tiles under the accessory, so the prefix buys nothing.
      */
     protected nameSubService(service: Service, label: string): void;
     protected createHeaterCoolerService(): void;
